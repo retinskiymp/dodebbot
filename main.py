@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import asyncio
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -9,6 +10,7 @@ from telegram.ext import (
     filters,
 )
 from db import SessionLocal, get_player, get_jackpot
+from events import EventManager
 
 TOKEN: str = os.getenv("BOT_TOKEN")
 SPIN_COST: int = int(os.getenv("SPIN_COST", "2"))
@@ -58,16 +60,16 @@ async def _insufficient_funds(
     context.user_data["last_bot_id"] = msg.message_id
 
 
-async def jackpot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    with SessionLocal() as session:
-        jp = get_jackpot(session, update.effective_chat.id).value
-    await update.message.reply_text(f"🎯 Текущий джек-пот: {jp} очков")
-
-
 async def casino_spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user = update.effective_user
     dice_msg = update.message
+
+    context.application.bot_data.setdefault("chats", set()).add(chat_id)
+    mgr: EventManager = context.application.bot_data["mgr"]
+    if mgr.is_active_participant(chat_id, user.id):
+        await update.message.reply_text("Ты участвуешь в ивенте — подожди окончания.")
+        return
 
     with SessionLocal() as session:
         player = get_player(session, user.id, user.first_name, START_BALANCE)
@@ -82,27 +84,53 @@ async def casino_spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         val = dice_msg.dice.value
         symbols = _decode(val)
-        sevens = symbols.count(0)
-        prize, new_jp = _calc_prize(val, symbols, sevens, jackpot_obj.value)
-        jackpot_obj.value = new_jp
+        prize, jackpot_obj.value = _calc_prize(
+            val, symbols, symbols.count(0), jackpot_obj.value
+        )
 
         player.balance += prize
-        profit = prize - SPIN_COST
-        balance = player.balance
+        profit, balance = prize - SPIN_COST, player.balance
         session.commit()
 
     await _delete_prev(context, chat_id)
     context.user_data["last_slot_id"] = dice_msg.message_id
-    reply = f"💸: -{SPIN_COST} | 🤑: {prize} | 🏦: {balance} (💹 {profit})"
-    bot_msg = await dice_msg.reply_text(reply)
+    msg = f"💸: -{SPIN_COST} | 🤑: {prize} | 🏦: {balance} (💹 {profit})"
+    bot_msg = await dice_msg.reply_text(msg)
     context.user_data["last_bot_id"] = bot_msg.message_id
 
 
+async def join_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    ev_id = c.args[0].lower() if c.args else None
+    ok, msg = c.application.bot_data["mgr"].join(
+        u.effective_chat.id, u.effective_user.id, ev_id
+    )
+    await u.message.reply_text(msg)
+
+
+async def event_info_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    await u.message.reply_text(c.application.bot_data["mgr"].info(u.effective_chat.id))
+
+
+async def jackpot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    with SessionLocal() as session:
+        jp = get_jackpot(session, update.effective_chat.id).value
+    await update.message.reply_text(f"🎯 Текущий джек-пот: {jp} очков")
+
+
+async def after_init(app):
+    app.bot_data["mgr"] = EventManager(app)
+    app.bot_data["chats"] = set()
+
+
 def main() -> None:
-    app = ApplicationBuilder().token(TOKEN).build()
+    app = ApplicationBuilder().token(TOKEN).post_init(after_init).build()
+
     slot_filter = filters.Dice.SLOT_MACHINE & ~filters.FORWARDED
     app.add_handler(MessageHandler(slot_filter, casino_spin))
+    app.add_handler(CommandHandler("join", join_cmd))
+    app.add_handler(CommandHandler(["event", "events"], event_info_cmd))
     app.add_handler(CommandHandler(["jackpot", "ochko"], jackpot_cmd))
+
     app.run_polling()
 
 
