@@ -13,10 +13,10 @@ Base.metadata.create_all(bind=engine)
 
 
 def get_player(session, user_id, first_name, start_balance):
-    player = session.get(PlayerModel, user_id)
+    player = session.query(PlayerModel).filter_by(tg_id=user_id).first()
     if not player:
         player = PlayerModel(
-            user_id=user_id, first_name=first_name, balance=start_balance
+            tg_id=user_id, first_name=first_name, balance=start_balance
         )
         session.add(player)
         session.commit()

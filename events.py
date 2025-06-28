@@ -139,7 +139,7 @@ class EventManager:
                 s = int((self.next_start - datetime.utcnow()).total_seconds())
                 if s > 0:
                     return f"Новый ивент через {fmt(s)}."
-        return "если вы видите это сообщение, то разраб долбаеб"
+        return "если ты видишь это сообщение, то наверняка ты спамишь, друг, хватит"
 
     async def _schedule_next(self, ctx=None):
         wait_sec = random.randint(MIN_WAIT, MAX_WAIT)

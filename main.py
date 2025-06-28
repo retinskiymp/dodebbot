@@ -193,7 +193,7 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     msg = (
-        f"👤 {player.first_name}\n"
+        f"👽 {player.first_name} (id:{player.id})\n"
         f"🏦 Баланс: {player.balance:,}\n"
         f"📊 Место в топе: {rank}"
     )
@@ -215,7 +215,7 @@ async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines = ["🏆 ТОП-10 игроков:"]
     for i, p in enumerate(top, 1):
-        lines.append(f"{i}. {p.first_name} — {p.balance:,}")
+        lines.append(f"{i}. {p.first_name} (id:{p.id}) — {p.balance:,}")
     await update.message.reply_text("\n".join(lines))
 
 
