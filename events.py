@@ -3,10 +3,26 @@ from datetime import datetime, timedelta
 from abc import ABC, abstractmethod
 from db import SessionLocal, get_player
 
-MIN_WAIT = int(os.getenv("EVENT_MIN_WAIT", "10"))
-MAX_WAIT = int(os.getenv("EVENT_MAX_WAIT", "15"))
+# Все интервалы в СЕКУНДАХ
+MIN_WAIT = int(os.getenv("EVENT_MIN_WAIT", "10"))  # 10 мин → 600 с
+MAX_WAIT = int(os.getenv("EVENT_MAX_WAIT", "10"))
 MIN_DUR = int(os.getenv("EVENT_MIN_DUR", "10"))
-MAX_DUR = int(os.getenv("EVENT_MAX_DUR", "15"))
+MAX_DUR = int(os.getenv("EVENT_MAX_DUR", "10"))
+MIN_GAP = int(os.getenv("EVENT_GAP_MIN", "10"))
+MAX_GAP = int(os.getenv("EVENT_GAP_MAX", "10"))
+
+
+def fmt(sec: int) -> str:
+    m, s = divmod(sec, 60)
+    h, m = divmod(m, 60)
+    parts = []
+    if h:
+        parts.append(f"{h} ч")
+    if m:
+        parts.append(f"{m} мин")
+    if not parts:
+        parts.append(f"{s} сек")
+    return " ".join(parts)
 
 
 class BaseEvent(ABC):
@@ -85,7 +101,10 @@ class EventManager:
     def __init__(self, app):
         self.jq = app.job_queue
         self.curr = None
-        self._schedule_next()
+        self.next_start: datetime | None = None
+        gap_sec = random.randint(MIN_GAP, MAX_GAP)
+        self.next_start = datetime.utcnow() + timedelta(seconds=gap_sec)
+        self.jq.run_once(self._schedule_next, gap_sec)
 
     def is_active_participant(self, chat_id: int, user_id: int) -> bool:
         return (
@@ -94,62 +113,81 @@ class EventManager:
             and user_id in self.curr["participants"].get(chat_id, set())
         )
 
-    def join(self, chat_id: int, user_id: int, ev_id: str | None):
+    def join(
+        self, chat_id: int, user_id: int, ev_id: str | None, user_name: str
+    ) -> tuple[bool, str]:
         if not self.curr or self.curr["status"] != "waiting":
-            return False, "Регистрация закрыта."
+            return False, "Регистрация закрыта"
         if ev_id and ev_id != self.curr["id"]:
-            return False, "Такого ивента сейчас нет."
+            return False, "Такого ивента сейчас нет"
+        if user_id in self.curr["participants"].get(chat_id, set()):
+            return False, "Ты уже зарегистрирован в этом ивенте"
+
         self.curr["participants"].setdefault(chat_id, set()).add(user_id)
-        return True, "Записан!"
+        return True, f"Удачи, {user_name}, в участии в «{self.curr['name']}»!"
 
-    def info(self, chat_id: int) -> str:
-        if not self.curr:
-            return "Ивентов нет."
-        if self.curr["status"] == "waiting":
-            m = int((self.curr["start"] - datetime.utcnow()).total_seconds() // 60)
-            return f"До начала «{self.curr['name']}» {m} мин."
-        if self.curr["status"] == "active":
-            m = int((self.curr["end"] - datetime.utcnow()).total_seconds() // 60)
-            return f"«{self.curr['name']}» идёт, осталось {m} мин."
-        return "Ивентов нет."
+    def info(self) -> str:
+        if self.curr:
+            if self.curr["status"] == "waiting":
+                s = int((self.curr["start"] - datetime.utcnow()).total_seconds())
+                return f"До начала «{self.curr['name']}» {fmt(s)}."
+            if self.curr["status"] == "active":
+                s = int((self.curr["end"] - datetime.utcnow()).total_seconds())
+                return f"«{self.curr['name']}» идёт, осталось {fmt(s)}."
+        else:
+            if self.next_start:
+                s = int((self.next_start - datetime.utcnow()).total_seconds())
+                if s > 0:
+                    return f"Новый ивент через {fmt(s)}."
+        return "если вы видите это сообщение, то разраб долбаеб"
 
-    def _schedule_next(self):
-        wait = random.randint(MIN_WAIT, MAX_WAIT)
+    async def _schedule_next(self, ctx=None):
+        wait_sec = random.randint(MIN_WAIT, MAX_WAIT)
+
         ev_cls = random.choice(EVENT_POOL)
         self.curr = {
             "id": ev_cls.id,
             "name": ev_cls.name,
             "class": ev_cls,
             "status": "waiting",
-            "start": datetime.utcnow() + timedelta(seconds=wait),
+            "start": datetime.utcnow() + timedelta(seconds=wait_sec),
             "duration": None,
-            "participants": {},  # chat_id → set(user_id)
+            "participants": {},
         }
-        self.jq.run_once(self._start, wait)
+        self.next_start = None
+        self.jq.run_once(self._start, wait_sec)
 
     async def _start(self, ctx):
         ev = self.curr
         ev["status"] = "active"
-        dur = random.randint(MIN_DUR, MAX_DUR)
-        ev["duration"] = dur
-        ev["end"] = datetime.utcnow() + timedelta(seconds=dur)
 
-        for cid in ctx.application.bot_data["chats"]:
+        dur_sec = random.randint(MIN_DUR, MAX_DUR)
+        ev["duration"] = dur_sec
+        ev["end"] = datetime.utcnow() + timedelta(seconds=dur_sec)
+
+        for cid, users in ev["participants"].items():
+            if not users:
+                continue
             await ctx.bot.send_message(
-                cid, f"🚀 «{ev['name']}» начался! {dur//60} мин."
+                cid, f"🚀 «{ev['name']}» начался! {fmt(dur_sec)}."
             )
 
-        ctx.job_queue.run_once(self._finish, dur)
+        self.jq.run_once(self._finish, dur_sec)
 
     async def _finish(self, ctx):
         ev = self.curr
         texts = ev["class"](ev["participants"]).finish()
 
-        for cid in ctx.application.bot_data["chats"]:
+        for cid, users in ev["participants"].items():
+            if not users:
+                continue
             await ctx.bot.send_message(
-                cid,
-                f"🏁 «{ev['name']}» завершён!\n{texts.get(cid, 'Участников не было.')}",
+                cid, f"🏁 «{ev['name']}» завершён!\n{texts[cid]}"
             )
 
+        ev["participants"].clear()
         self.curr = None
-        self._schedule_next()
+
+        gap_sec = random.randint(MIN_GAP, MAX_GAP)
+        self.next_start = datetime.utcnow() + timedelta(seconds=gap_sec)
+        self.jq.run_once(self._schedule_next, gap_sec)

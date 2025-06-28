@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import os
-import asyncio
-from telegram import Update
+from telegram import Update, Message
 from telegram.ext import (
     ApplicationBuilder,
     MessageHandler,
@@ -9,12 +8,14 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from db import SessionLocal, get_player, get_jackpot
+from db import SessionLocal, get_player, get_jackpot, get_chat, load_event_chats
+from models import PlayerModel
 from events import EventManager
 
 TOKEN: str = os.getenv("BOT_TOKEN")
 SPIN_COST: int = int(os.getenv("SPIN_COST", "2"))
 JACKPOT_INCREMENT: int = int(os.getenv("JACKPOT_INCREMENT", "1"))
+JACKPOT_START: int = int(os.getenv("JACKPOT_START", "0"))
 START_BALANCE: int = int(os.getenv("START_BALANCE", "100"))
 MAP = [1, 2, 3, 0]
 
@@ -28,7 +29,7 @@ def _calc_prize(
     val: int, symbols: list[int], sevens: int, jackpot_val: int
 ) -> tuple[int, int]:
     if val == 64:
-        return 10 + jackpot_val, 10
+        return 10 + jackpot_val, JACKPOT_START
     if len(set(symbols)) == 1:
         return 7, jackpot_val
     if sevens == 2:
@@ -60,15 +61,50 @@ async def _insufficient_funds(
     context.user_data["last_bot_id"] = msg.message_id
 
 
+def _is_chat_registered_for_events(
+    chat_id: int, context: ContextTypes.DEFAULT_TYPE
+) -> bool:
+    return chat_id in context.application.bot_data.get("chats", set())
+
+
+async def _safe_delete(bot, chat_id: int, msg_id: int):
+    from telegram.error import TelegramError
+
+    try:
+        await bot.delete_message(chat_id, msg_id)
+    except TelegramError:
+        pass
+
+
+async def _reject_spin(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    dice_msg: Message,
+    text: str,
+):
+    await _safe_delete(context.bot, chat_id, dice_msg.message_id)
+
+    prev_err_id = context.user_data.pop("err_msg_id", None)
+    if prev_err_id:
+        await _safe_delete(context.bot, chat_id, prev_err_id)
+
+    err = await context.bot.send_message(chat_id, text)
+    context.user_data["err_msg_id"] = err.message_id
+
+
 async def casino_spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user = update.effective_user
     dice_msg = update.message
 
-    context.application.bot_data.setdefault("chats", set()).add(chat_id)
     mgr: EventManager = context.application.bot_data["mgr"]
     if mgr.is_active_participant(chat_id, user.id):
-        await update.message.reply_text("Ты участвуешь в ивенте — подожди окончания.")
+        await _reject_spin(
+            context,
+            chat_id,
+            dice_msg,
+            "🚧 Ты участвуешь в ивенте — дождись окончания.",
+        )
         return
 
     with SessionLocal() as session:
@@ -80,46 +116,128 @@ async def casino_spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         player.balance -= SPIN_COST
-        jackpot_obj.value += JACKPOT_INCREMENT
+        jackpot_obj.jackpot += JACKPOT_INCREMENT
+        jackpot_before = jackpot_obj.jackpot
 
         val = dice_msg.dice.value
         symbols = _decode(val)
-        prize, jackpot_obj.value = _calc_prize(
-            val, symbols, symbols.count(0), jackpot_obj.value
+        prize, jackpot_obj.jackpot = _calc_prize(
+            val, symbols, symbols.count(0), jackpot_obj.jackpot
         )
 
         player.balance += prize
         profit, balance = prize - SPIN_COST, player.balance
         session.commit()
 
+    current_jackpot = jackpot_obj.jackpot
+    jackpot_won = current_jackpot < jackpot_before
+
     await _delete_prev(context, chat_id)
     context.user_data["last_slot_id"] = dice_msg.message_id
-    msg = f"💸: -{SPIN_COST} | 🤑: {prize} | 🏦: {balance} (💹 {profit})"
-    bot_msg = await dice_msg.reply_text(msg)
+
+    err_id = context.user_data.pop("err_msg_id", None)
+    if err_id:
+        await _safe_delete(context.bot, chat_id, err_id)
+
+    trend_emoji = "🤑" if profit > 0 else "💀" if profit < 0 else "😑"
+
+    msg_text = (
+        f"🏦: {balance:,} | {trend_emoji} {profit:+,} | " f"🎰 {current_jackpot:,}"
+    )
+    bot_msg = await dice_msg.reply_text(msg_text)
     context.user_data["last_bot_id"] = bot_msg.message_id
 
+    if jackpot_won and jackpot_before:
+        announce = (
+            f"🎉 {user.first_name} сорвал джекпот — " f"{jackpot_before:,} монет! 🎉"
+        )
+        await context.bot.send_message(chat_id, announce)
 
-async def join_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    ev_id = c.args[0].lower() if c.args else None
-    ok, msg = c.application.bot_data["mgr"].join(
-        u.effective_chat.id, u.effective_user.id, ev_id
+
+async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_chat_registered_for_events(update.effective_chat.id, context):
+        await update.message.reply_text("Чат не участвует в ивентах.")
+        return
+    ev_id = context.args[0].lower() if context.args else None
+    ok, msg = context.application.bot_data["mgr"].join(
+        update.effective_chat.id,
+        update.effective_user.id,
+        ev_id,
+        update.effective_user.first_name,
     )
-    await u.message.reply_text(msg)
+    await update.message.reply_text(msg)
 
 
-async def event_info_cmd(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text(c.application.bot_data["mgr"].info(u.effective_chat.id))
+async def event_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_chat_registered_for_events(update.effective_chat.id, context):
+        await update.message.reply_text("Чат не участвует в ивентах.")
+        return
+    await update.message.reply_text(context.application.bot_data["mgr"].info())
 
 
 async def jackpot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with SessionLocal() as session:
-        jp = get_jackpot(session, update.effective_chat.id).value
+        jp = get_jackpot(session, update.effective_chat.id).jackpot
     await update.message.reply_text(f"🎯 Текущий джек-пот: {jp} очков")
 
 
+async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    with SessionLocal() as session:
+        player = get_player(session, user.id, user.first_name, START_BALANCE)
+        rank = (
+            session.query(PlayerModel)
+            .filter(PlayerModel.balance > player.balance)
+            .count()
+            + 1
+        )
+
+    msg = (
+        f"👤 {player.first_name}\n"
+        f"🏦 Баланс: {player.balance:,}\n"
+        f"📊 Место в топе: {rank}"
+    )
+    await update.message.reply_text(msg)
+
+
+async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    with SessionLocal() as session:
+        top = (
+            session.query(PlayerModel)
+            .order_by(PlayerModel.balance.desc())
+            .limit(10)
+            .all()
+        )
+
+    if not top:
+        await update.message.reply_text("Пока нет ни одного игрока.")
+        return
+
+    lines = ["🏆 ТОП-10 игроков:"]
+    for i, p in enumerate(top, 1):
+        lines.append(f"{i}. {p.first_name} — {p.balance:,}")
+    await update.message.reply_text("\n".join(lines))
+
+
+async def register_chat_for_events_cmd(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+):
+    chat_id = update.effective_chat.id
+    if _is_chat_registered_for_events(update.effective_chat.id, context):
+        await update.message.reply_text(f"Чат уже зарегистрирован для ивентов")
+        return
+
+    with SessionLocal() as session:
+        chat_model = get_chat(session, chat_id)
+        chat_model.events = True
+        context.application.bot_data.setdefault("chats", set()).add(chat_id)
+        session.commit()
+        await update.message.reply_text(f"Чат теперь участвует в ивентах")
+
+
 async def after_init(app):
+    app.bot_data["chats"] = load_event_chats()
     app.bot_data["mgr"] = EventManager(app)
-    app.bot_data["chats"] = set()
 
 
 def main() -> None:
@@ -130,6 +248,11 @@ def main() -> None:
     app.add_handler(CommandHandler("join", join_cmd))
     app.add_handler(CommandHandler(["event", "events"], event_info_cmd))
     app.add_handler(CommandHandler(["jackpot", "ochko"], jackpot_cmd))
+    app.add_handler(
+        CommandHandler("register_chat_for_events", register_chat_for_events_cmd)
+    )
+    app.add_handler(CommandHandler("status", status_cmd))
+    app.add_handler(CommandHandler("top", top_cmd))
 
     app.run_polling()
 
