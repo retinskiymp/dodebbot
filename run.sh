@@ -1,16 +1,21 @@
-#!/bin/bash -ex
+#!/usr/bin/env bash
+set -euo pipefail
 
-mkdir -p ./db
+mkdir -p ./db           # локальная папка под SQLite/файлы бота
 
-NAME=slotbot
+NAME=slotbot            # как назвали сам образ/контейнер
+IMAGE_TAG=slotbot:1.0
 
-docker build -t ${NAME} .
-docker rm -f ${NAME} || true
+if [[ -f slotbot.tar ]] && ! docker image inspect "$IMAGE_TAG" &>/dev/null; then
+  docker load -i slotbot.tar
+fi
 
-docker run -d --name ${NAME} \
-    --restart=unless-stopped \
-    -e BOT_TOKEN="" \
-    -v $(pwd)/db:/app/db \
-    ${NAME}
+docker rm -f "$NAME" 2>/dev/null || true
 
-docker logs -f ${NAME}
+docker run -d --name "$NAME" \
+  --restart=unless-stopped \
+  --env-file .env \
+  -v "$(pwd)/db:/app/db" \
+  "$IMAGE_TAG"
+
+docker logs -f "$NAME"
