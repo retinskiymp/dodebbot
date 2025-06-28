@@ -11,6 +11,7 @@ from telegram.ext import (
 from db import SessionLocal, get_player, get_jackpot, get_chat, load_event_chats
 from models import PlayerModel
 from events import EventManager
+from items import get_item, ITEMS
 
 TOKEN: str = os.getenv("BOT_TOKEN")
 SPIN_COST: int = int(os.getenv("SPIN_COST", "2"))
@@ -20,7 +21,7 @@ START_BALANCE: int = int(os.getenv("START_BALANCE", "100"))
 MAP = [1, 2, 3, 0]
 
 
-def _decode(val: int) -> list[int]:
+def _decode(val: int) -> list[int]:  # ---------------- инвентарь ----------------
     v = val - 1
     return [MAP[v & 3], MAP[(v >> 2) & 3], MAP[(v >> 4) & 3]]
 
@@ -185,6 +186,7 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     with SessionLocal() as session:
         player = get_player(session, user.id, user.first_name, START_BALANCE)
+
         rank = (
             session.query(PlayerModel)
             .filter(PlayerModel.balance > player.balance)
@@ -192,10 +194,22 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             + 1
         )
 
+        inv = player.items or {}
+        if inv:
+            inv_lines = []
+            for id_str, qty in inv.items():
+                item_obj = ITEMS.get(int(id_str))
+                name = item_obj.name if item_obj else f"ID {id_str}"
+                inv_lines.append(f"• (ID:{id_str}) {name} × {qty}")
+            inv_block = "🎒 Инвентарь:\n" + "\n".join(inv_lines)
+        else:
+            inv_block = "🎒 Инвентарь пуст"
+
     msg = (
         f"👽 {player.first_name} (id:{player.id})\n"
         f"🏦 Баланс: {player.balance:,}\n"
-        f"📊 Место в топе: {rank}"
+        f"📊 Место в топе: {rank}\n\n"
+        f"{inv_block}"
     )
     await update.message.reply_text(msg)
 
@@ -216,6 +230,87 @@ async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = ["🏆 ТОП-10 игроков:"]
     for i, p in enumerate(top, 1):
         lines.append(f"{i}. {p.first_name} (id:{p.id}) — {p.balance:,}")
+    await update.message.reply_text("\n".join(lines))
+
+
+async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Использование: /buy <id> [кол-во]")
+        return
+
+    try:
+        item_id = int(context.args[0])
+        qty = int(context.args[1]) if len(context.args) > 1 else 1
+    except ValueError:
+        await update.message.reply_text("id и количество должны быть числами")
+        return
+
+    item = get_item(item_id)
+    if not item:
+        await update.message.reply_text("Неизвестный товар")
+        return
+
+    user = update.effective_user
+    with SessionLocal() as s:
+        player = get_player(s, user.id, user.first_name, START_BALANCE)
+        cost = item.price * qty
+        if player.balance < cost:
+            await update.message.reply_text("Недостаточно монет, дружок")
+            return
+        try:
+            item.buy(player, qty)
+        except ValueError as e:
+            await update.message.reply_text(str(e))
+            return
+
+        player.balance -= cost
+        s.commit()
+
+    await update.message.reply_text(f"🛒 Куплено: {item.name} ×{qty} за {cost} монет")
+
+
+async def use_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Использование: /use <id> [кол-во]")
+        return
+
+    try:
+        item_id = int(context.args[0])
+        qty = int(context.args[1]) if len(context.args) > 1 else 1
+    except ValueError:
+        await update.message.reply_text("id и количество должны быть числами")
+        return
+
+    item = get_item(item_id)
+    if not item:
+        await update.message.reply_text("Неизвестный предмет")
+        return
+
+    user = update.effective_user
+    with SessionLocal() as s:
+        player = get_player(s, user.id, user.first_name, START_BALANCE)
+
+        have = (player.items or {}).get(str(item.id), 0)
+        if have < qty:
+            await update.message.reply_text("У тебя нет такого количества, друг")
+            return
+
+        try:
+            msg = item.use(player, qty)
+        except ValueError as e:
+            await update.message.reply_text(str(e))
+            return
+
+        s.commit()
+
+    await update.message.reply_text(msg)
+
+
+async def shop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lines = ["🛍 Доступные товарчики:"]
+    for item_id in sorted(ITEMS):
+        it = ITEMS[item_id]
+        lines.append(f"ID:{item_id}. {it.name} — {it.price} монет\n" f"📜 {it.desc}")
     await update.message.reply_text("\n".join(lines))
 
 
@@ -253,6 +348,9 @@ def main() -> None:
     )
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("top", top_cmd))
+    app.add_handler(CommandHandler("buy", buy_cmd))
+    app.add_handler(CommandHandler("use", use_cmd))
+    app.add_handler(CommandHandler("shop", shop_cmd))
 
     app.run_polling()
 
