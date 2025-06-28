@@ -57,7 +57,7 @@ class Item:
 
 class LootBox(Item):
     id = ItemID.LOOTBOX
-    name = "🎁 Дропбокс"
+    name = "🎁 Лутбокс"
     desc = (
         "Открой его и получи случайное количество монет, а может быть и еще что-то...?"
     )
@@ -74,7 +74,7 @@ class LootBox(Item):
             random.randint(self.REWARD_MIN, self.REWARD_MAX) for _ in range(qty)
         )
         player.balance += total
-        return f"🎁 Ты открыл {qty} дропчиков(ов) и получил {total} монет!"
+        return f"🎁 Открыто боксов: {qty}, награда {total} монет"
 
 
 class SaunaHat(Item):

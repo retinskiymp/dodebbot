@@ -143,11 +143,11 @@ class BanEvent(BaseEvent):
                 for uid, prize in zip(users, prizes):
                     pl = get_player(s, uid, "", 0)
 
-                    if pl.balance <= 0:
+                    if pl.balance <= 20:
                         pity = 100
                         pl.balance += pity
                         lines.append(
-                            f"😢 Никите стало жаль {pl.first_name}: он пришёл даже без "
+                            f"Никите стало жаль {pl.first_name}: он пришёл даже без "
                             f"трусиков, поэтому Никита просто так дал {pity} очков."
                         )
                         continue

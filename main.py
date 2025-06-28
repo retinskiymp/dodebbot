@@ -26,16 +26,14 @@ def _decode(val: int) -> list[int]:  # ---------------- инвентарь -----
     return [MAP[v & 3], MAP[(v >> 2) & 3], MAP[(v >> 4) & 3]]
 
 
-def _calc_prize(
-    val: int, symbols: list[int], sevens: int, jackpot_val: int
-) -> tuple[int, int]:
+def _calc_prize(val: int, symbols: list[int], sevens: int) -> tuple[bool, int]:
     if val == 64:
-        return 10 + jackpot_val, JACKPOT_START
+        return [True, 15]
     if len(set(symbols)) == 1:
-        return 7, jackpot_val
+        return [False, 10]
     if sevens == 2:
-        return 5, jackpot_val
-    return 0, jackpot_val
+        return [False, 8]
+    return [False, 0]
 
 
 async def _delete_prev(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
@@ -110,28 +108,30 @@ async def casino_spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     with SessionLocal() as session:
         player = get_player(session, user.id, user.first_name, START_BALANCE)
-        jackpot_obj = get_jackpot(session, chat_id)
+        jackpot_obj = get_jackpot(session, chat_id, JACKPOT_START)
 
         if player.balance < SPIN_COST:
             await _insufficient_funds(context, chat_id, dice_msg, player)
             return
 
         player.balance -= SPIN_COST
-        jackpot_obj.jackpot += JACKPOT_INCREMENT
-        jackpot_before = jackpot_obj.jackpot
 
         val = dice_msg.dice.value
         symbols = _decode(val)
-        prize, jackpot_obj.jackpot = _calc_prize(
-            val, symbols, symbols.count(0), jackpot_obj.jackpot
-        )
+        is_jackpot, prize = _calc_prize(val, symbols, symbols.count(0))
+
+        if not is_jackpot:
+            jackpot_obj.jackpot += JACKPOT_INCREMENT
+        else:
+            prize += jackpot_obj.jackpot
+            jackpot_before = jackpot_obj.jackpot
+            jackpot_obj.jackpot = JACKPOT_START
 
         player.balance += prize
         profit, balance = prize - SPIN_COST, player.balance
         session.commit()
 
     current_jackpot = jackpot_obj.jackpot
-    jackpot_won = current_jackpot < jackpot_before
 
     await _delete_prev(context, chat_id)
     context.user_data["last_slot_id"] = dice_msg.message_id
@@ -148,7 +148,7 @@ async def casino_spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_msg = await dice_msg.reply_text(msg_text)
     context.user_data["last_bot_id"] = bot_msg.message_id
 
-    if jackpot_won and jackpot_before:
+    if is_jackpot and jackpot_before:
         announce = (
             f"🎉 {user.first_name} сорвал джекпот — " f"{jackpot_before:,} монет! 🎉"
         )
@@ -178,7 +178,7 @@ async def event_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def jackpot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with SessionLocal() as session:
-        jp = get_jackpot(session, update.effective_chat.id).jackpot
+        jp = get_jackpot(session, update.effective_chat.id, JACKPOT_START).jackpot
     await update.message.reply_text(f"🎯 Текущий джек-пот: {jp} очков")
 
 

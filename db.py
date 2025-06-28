@@ -38,10 +38,10 @@ def load_event_chats() -> set[int]:
         return {row[0] for row in rows}
 
 
-def get_jackpot(session, chat_id):
+def get_jackpot(session, chat_id, default_jackpot=0):
     jp = session.get(ChatModel, chat_id)
     if not jp:
-        jp = ChatModel(chat_id=chat_id, jackpot=0)
+        jp = ChatModel(chat_id=chat_id, jackpot=default_jackpot)
         session.add(jp)
         session.commit()
     return jp
