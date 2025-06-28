@@ -1,0 +1,5 @@
+slotbot.tar
+.vscode/
+__pycache__/
+data.db
+venv/
