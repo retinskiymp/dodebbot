@@ -154,9 +154,7 @@ async def event_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_chat_registered_for_events(update.effective_chat.id, context):
         await _reply_clean(update, context, "Чат не участвует в ивентах.")
         return
-    await _reply_clean(
-        update, context, context.application.bot_data["mgr"].participants_info()
-    )
+    await _reply_clean(update, context, context.application.bot_data["mgr"].info())
 
 
 async def jackpot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
