@@ -330,6 +330,27 @@ async def register_chat_for_events_cmd(
         await update.message.reply_text(f"Чат теперь участвует в ивентах")
 
 
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = (
+        "📖 <b>Доступные команды</b>\n"
+        "\n"
+        "🎰 <b>Слот-машина</b> — просто пришлите кубик-слот в чат.\n"
+        "\n"
+        "🛎️  /join - присоединиться к текущему ивенту\n"
+        "📅  /event(s) - информация о ивентах\n"
+        "🎯  /jackpot - размер джек-пота в чате\n"
+        "\n"
+        "👤  /status - ваш баланс, место и инвентарь\n"
+        "🏆  /top - топ-10 игроков по балансу\n"
+        "🛍️  /shop - список товаров магазина\n"
+        "💰  /buy <i>id</i> [n] - купить товар (по умолчанию 1 шт.)\n"
+        "🎒  /use <i>id</i> [n] - использовать товар из инвентаря\n"
+        "\n"
+        "⚙️  /register_chat_for_events - подключить чат к ивентам\n"
+    )
+    await update.message.reply_text(help_text, parse_mode="HTML")
+
+
 async def after_init(app):
     app.bot_data["chats"] = load_event_chats()
     app.bot_data["mgr"] = EventManager(app)
@@ -351,6 +372,7 @@ def main() -> None:
     app.add_handler(CommandHandler("buy", buy_cmd))
     app.add_handler(CommandHandler("use", use_cmd))
     app.add_handler(CommandHandler("shop", shop_cmd))
+    app.add_handler(CommandHandler("help", help_cmd))
 
     app.run_polling()
 
