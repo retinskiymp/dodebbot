@@ -3,3 +3,4 @@ slotbot.tar
 __pycache__/
 data.db
 venv/
+.env
