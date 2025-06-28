@@ -15,7 +15,7 @@ docker rm -f "$NAME" 2>/dev/null || true
 docker run -d --name "$NAME" \
   --restart=unless-stopped \
   --env-file .env \
-  -v "$(pwd)/db:/app/db" \
+  -v "$(pwd)/../db_slot:/app/db" \
   "$IMAGE_TAG"
 
 docker logs -f "$NAME"
