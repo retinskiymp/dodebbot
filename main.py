@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import os
-from telegram import Update, Message
+import asyncio
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     MessageHandler,
     CommandHandler,
     ContextTypes,
+    Defaults,
     filters,
 )
 from db import SessionLocal, get_player, get_jackpot, get_chat, load_event_chats
@@ -21,19 +23,32 @@ START_BALANCE: int = int(os.getenv("START_BALANCE", "100"))
 MAP = [1, 2, 3, 0]
 
 
-def _decode(val: int) -> list[int]:  # ---------------- инвентарь ----------------
+def _decode(val: int) -> list[int]:
     v = val - 1
     return [MAP[v & 3], MAP[(v >> 2) & 3], MAP[(v >> 4) & 3]]
 
 
 def _calc_prize(val: int, symbols: list[int], sevens: int) -> tuple[bool, int]:
     if val == 64:
-        return [True, 15]
+        return True, 15
     if len(set(symbols)) == 1:
-        return [False, 10]
+        return False, 10
     if sevens == 2:
-        return [False, 8]
-    return [False, 0]
+        return False, 8
+    return False, 0
+
+
+async def safe_reply(msg_obj, text: str, **kwargs):
+    from telegram.error import TimedOut
+
+    for attempt in range(3):
+        try:
+            return await msg_obj.reply_text(text, **kwargs)
+        except TimedOut:
+            if attempt < 2:
+                await asyncio.sleep(1)
+                continue
+            raise
 
 
 async def _reply_clean(
@@ -43,12 +58,11 @@ async def _reply_clean(
     *,
     is_slot: bool = False,
     **kwargs,
-) -> Message:
+):
     chat_id = update.effective_chat.id
     store = context.user_data
 
-    keys = ("last_bot_id", "last_user_id", "last_slot_id")
-    for key in keys:
+    for key in ("last_bot_id", "last_user_id", "last_slot_id"):
         mid = store.pop(key, None)
         if mid:
             try:
@@ -56,14 +70,18 @@ async def _reply_clean(
             except Exception:
                 pass
 
-    msg = await update.message.reply_text(text, **kwargs)
+    msg_obj = update.effective_message
+    if not msg_obj:
+        return
+
+    bot_msg = await safe_reply(msg_obj, text, **kwargs)
 
     if is_slot:
-        store["last_slot_id"] = update.message.message_id
-    store["last_bot_id"] = msg.message_id
-    store["last_user_id"] = update.message.message_id
+        store["last_slot_id"] = msg_obj.message_id
+    store["last_bot_id"] = bot_msg.message_id
+    store["last_user_id"] = msg_obj.message_id
 
-    return msg
+    return bot_msg
 
 
 def _is_chat_registered_for_events(
@@ -75,7 +93,7 @@ def _is_chat_registered_for_events(
 async def casino_spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user = update.effective_user
-    dice_msg = update.message
+    dice_msg = update.effective_message
 
     mgr: EventManager = context.application.bot_data["mgr"]
     if mgr.is_active_participant(chat_id, user.id):
@@ -95,7 +113,6 @@ async def casino_spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         player.balance -= SPIN_COST
-
         val = dice_msg.dice.value
         symbols = _decode(val)
         is_jack, prize = _calc_prize(val, symbols, symbols.count(0))
@@ -113,6 +130,7 @@ async def casino_spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.commit()
         current_jackpot = jackpot_obj.jackpot
 
+    # удаляем предыдущие
     for key in ("last_slot_id", "last_bot_id", "last_user_id"):
         mid = context.user_data.pop(key, None)
         if mid:
@@ -124,14 +142,13 @@ async def casino_spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     trend = "🤑" if profit > 0 else "💀" if profit < 0 else "😑"
     text = f"🏦: {balance:,} | {trend} {profit:+,} | 🎰 {current_jackpot:,}"
 
-    bot_msg = await dice_msg.reply_text(text)
-
+    bot_msg = await safe_reply(dice_msg, text)
     context.user_data["last_slot_id"] = dice_msg.message_id
     context.user_data["last_bot_id"] = bot_msg.message_id
 
     if is_jack and jackpot_before:
-        await context.bot.send_message(
-            chat_id,
+        await safe_reply(
+            bot_msg,
             f"🎉 {user.first_name} сорвал джекпот — {jackpot_before:,} монет! 🎉",
         )
 
@@ -154,7 +171,8 @@ async def event_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_chat_registered_for_events(update.effective_chat.id, context):
         await _reply_clean(update, context, "Чат не участвует в ивентах.")
         return
-    await _reply_clean(update, context, context.application.bot_data["mgr"].info())
+    info = context.application.bot_data["mgr"].info()
+    await _reply_clean(update, context, info)
 
 
 async def jackpot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -167,25 +185,21 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     with SessionLocal() as session:
         player = get_player(session, user.id, user.first_name, START_BALANCE)
-
         rank = (
             session.query(PlayerModel)
             .filter(PlayerModel.balance > player.balance)
             .count()
             + 1
         )
-
         inv = player.items or {}
         if inv:
-            inv_lines = []
-            for id_str, qty in inv.items():
-                item_obj = ITEMS.get(int(id_str))
-                name = item_obj.name if item_obj else f"ID {id_str}"
-                inv_lines.append(f"• (ID:{id_str}) {name} × {qty}")
+            inv_lines = [
+                f"• (ID:{id_str}) {ITEMS.get(int(id_str),{'name':'ID '+id_str}).get('name')} × {qty}"
+                for id_str, qty in inv.items()
+            ]
             inv_block = "🎒 Инвентарь:\n" + "\n".join(inv_lines)
         else:
             inv_block = "🎒 Инвентарь пуст"
-
     msg = (
         f"👽 {player.first_name} (id:{player.id})\n"
         f"🏦 Баланс: {player.balance:,}\n"
@@ -203,14 +217,12 @@ async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             .limit(10)
             .all()
         )
-
     if not top:
         await _reply_clean(update, context, "Пока нет ни одного игрока.")
         return
-
-    lines = ["🏆 ТОП-10 игроков:"]
-    for i, p in enumerate(top, 1):
-        lines.append(f"{i}. {p.first_name} (id:{p.id}) — {p.balance:,}")
+    lines = ["🏆 ТОП-10 игроков:"] + [
+        f"{i+1}. {p.first_name} (id:{p.id}) — {p.balance:,}" for i, p in enumerate(top)
+    ]
     await _reply_clean(update, context, "\n".join(lines))
 
 
@@ -218,19 +230,16 @@ async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await _reply_clean(update, context, "Использование: /buy <id> [кол-во]")
         return
-
     try:
         item_id = int(context.args[0])
         qty = int(context.args[1]) if len(context.args) > 1 else 1
     except ValueError:
         await _reply_clean(update, context, "id и количество должны быть числами")
         return
-
     item = get_item(item_id)
     if not item:
         await _reply_clean(update, context, "Неизвестный товар")
         return
-
     user = update.effective_user
     with SessionLocal() as s:
         player = get_player(s, user.id, user.first_name, START_BALANCE)
@@ -243,10 +252,8 @@ async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ValueError as e:
             await _reply_clean(update, context, str(e))
             return
-
         player.balance -= cost
         s.commit()
-
     await _reply_clean(
         update, context, f"🛒 Куплено: {item.name} ×{qty} за {cost} монет"
     )
@@ -256,36 +263,29 @@ async def use_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await _reply_clean(update, context, "Использование: /use <id> [кол-во]")
         return
-
     try:
         item_id = int(context.args[0])
         qty = int(context.args[1]) if len(context.args) > 1 else 1
     except ValueError:
         await _reply_clean(update, context, "id и количество должны быть числами")
         return
-
     item = get_item(item_id)
     if not item:
         await _reply_clean(update, context, "Неизвестный предмет")
         return
-
     user = update.effective_user
     with SessionLocal() as s:
         player = get_player(s, user.id, user.first_name, START_BALANCE)
-
         have = (player.items or {}).get(str(item.id), 0)
         if have < qty:
             await _reply_clean(update, context, "У тебя нет такого количества, друг")
             return
-
         try:
             msg = item.use(player, qty)
         except ValueError as e:
             await _reply_clean(update, context, str(e))
             return
-
         s.commit()
-
     await _reply_clean(update, context, msg)
 
 
@@ -293,7 +293,7 @@ async def shop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = ["🛍 Доступные товарчики:"]
     for item_id in sorted(ITEMS):
         it = ITEMS[item_id]
-        lines.append(f"ID:{item_id}. {it.name} — {it.price} монет\n" f"📜 {it.desc}")
+        lines.append(f"ID:{item_id}. {it.name} — {it.price} монет\n📜 {it.desc}")
     await _reply_clean(update, context, "\n".join(lines))
 
 
@@ -301,25 +301,24 @@ async def register_chat_for_events_cmd(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ):
     chat_id = update.effective_chat.id
-    if _is_chat_registered_for_events(update.effective_chat.id, context):
+    if _is_chat_registered_for_events(chat_id, context):
         await _reply_clean(update, context, "Этот чат уже зарегистрирован для ивентов.")
         return
-
     with SessionLocal() as session:
         chat_model = get_chat(session, chat_id)
         chat_model.events = True
         context.application.bot_data.setdefault("chats", set()).add(chat_id)
         session.commit()
-        await _reply_clean(
-            update, context, "Чат успешно зарегистрирован для участия в ивентах."
-        )
+    await _reply_clean(
+        update, context, "Чат успешно зарегистрирован для участия в ивентах."
+    )
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "📖 <b>Доступные команды</b>\n"
         "\n"
-        "🎰 <b>Слот-машина</b> — просто пришлите кубик-слот в чат.\n"
+        "🎰 <b>Слот-машина</b> — просто пришлите в чат.\n"
         "\n"
         "🛎️  /join - присоединиться к текущему ивенту\n"
         "📅  /event(s) - информация о ивентах\n"
@@ -333,7 +332,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "\n"
         "⚙️  /register_chat_for_events - подключить чат к ивентам\n"
     )
-    await update.message.reply_text(help_text, parse_mode="HTML")
+    await update.effective_message.reply_text(help_text, parse_mode="HTML")
 
 
 async def after_init(app):
@@ -341,8 +340,21 @@ async def after_init(app):
     app.bot_data["mgr"] = EventManager(app)
 
 
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    import logging
+
+    logging.exception("Ошибка в обработчике")
+    msg = update.effective_message
+    if msg:
+        try:
+            await msg.reply_text("Произошла ошибка, попробуйте позже.")
+        except Exception:
+            pass
+
+
 def main() -> None:
     app = ApplicationBuilder().token(TOKEN).post_init(after_init).build()
+    app.add_error_handler(error_handler)
 
     slot_filter = filters.Dice.SLOT_MACHINE & ~filters.FORWARDED
     app.add_handler(MessageHandler(slot_filter, casino_spin))
