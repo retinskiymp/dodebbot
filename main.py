@@ -193,10 +193,11 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         inv = player.items or {}
         if inv:
-            inv_lines = [
-                f"• (ID:{id_str}) {ITEMS.get(int(id_str),{'name':'ID '+id_str}).get('name')} × {qty}"
-                for id_str, qty in inv.items()
-            ]
+            inv_lines = []
+            for id_str, qty in inv.items():
+                item_obj = ITEMS.get(int(id_str))
+                name = item_obj.name if item_obj else f"ID {id_str}"
+                inv_lines.append(f"• (ID:{id_str}) {name} × {qty}")
             inv_block = "🎒 Инвентарь:\n" + "\n".join(inv_lines)
         else:
             inv_block = "🎒 Инвентарь пуст"

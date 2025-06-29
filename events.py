@@ -47,7 +47,7 @@ class BanEvent(BaseEvent):
 
     PRIZES = [
         (
-            100,
+            50,
             [
                 "{name} так разошёлся с веником, что Никита заподозрил неладное {prize} очков за банный фетиш!",
                 "{name} упал на каменку и теперь у него «фирменный» узор на жопе {prize} очков за брендирование!",
@@ -62,7 +62,7 @@ class BanEvent(BaseEvent):
             ],
         ),
         (
-            60,
+            30,
             [
                 "{name} перепутал полотенце с простынёй и вышел «в платье» {prize} очков за банную моду!",
                 "{name} пытался охладиться, но сел на лёд и примёрз {prize} очков за эффект «поп-мороженое»!",
@@ -77,7 +77,7 @@ class BanEvent(BaseEvent):
             ],
         ),
         (
-            40,
+            10,
             [
                 "{name} перепутал веник с метлой и пытался «улететь» {prize} очков за банную магию!",
                 "{name} устроил «битву полотенцами» и проиграл {prize} очков за мокрое поражение!",
@@ -92,7 +92,7 @@ class BanEvent(BaseEvent):
             ],
         ),
         (
-            20,
+            5,
             [
                 "{name} сидел в углу и тихо парился, как монах {prize} очков за банную медитацию!",
                 "{name} уронил шапку для пара в лоханку {prize} очков за мокрый головной убор!",
@@ -107,7 +107,7 @@ class BanEvent(BaseEvent):
             ],
         ),
         (
-            -30,
+            -5,
             [
                 "{name} устроил потоп, забыв закрыть кран минус {prize} очков за подводную баню!",
                 "{name} принёс в парилку лампу с аромамаслами… это был бензин минус {prize} очков за пиротехническое шоу!",
@@ -144,7 +144,7 @@ class BanEvent(BaseEvent):
                     pl = get_player(s, uid, "", 0)
 
                     if pl.balance <= 20:
-                        pity = 100
+                        pity = 20
                         pl.balance += pity
                         lines.append(
                             f"Никите стало жаль {pl.first_name}: он пришёл даже без "
@@ -154,7 +154,7 @@ class BanEvent(BaseEvent):
 
                     inv = pl.items or {}
                     has_hat = str(ItemID.SAUNA_HAT) in inv
-                    bonus = 30 if has_hat else 0
+                    bonus = 10 if has_hat else 0
 
                     new_balance = pl.balance + prize + bonus
                     if new_balance < 0:
@@ -229,52 +229,70 @@ class EventManager:
         return "Видимо ивент сейчас выбирается..."
 
     async def _schedule_next(self, ctx=None):
-        wait_sec = random.randint(MIN_WAIT, MAX_WAIT)
+        try:
+            wait_sec = random.randint(MIN_WAIT, MAX_WAIT)
 
-        ev_cls = random.choice(EVENT_POOL)
-        self.curr = {
-            "id": ev_cls.id,
-            "name": ev_cls.name,
-            "class": ev_cls,
-            "status": "waiting",
-            "start": datetime.utcnow() + timedelta(seconds=wait_sec),
-            "duration": None,
-            "participants": {},
-        }
-        self.next_start = None
-        self.jq.run_once(self._start, wait_sec)
+            ev_cls = random.choice(EVENT_POOL)
+            self.curr = {
+                "id": ev_cls.id,
+                "name": ev_cls.name,
+                "class": ev_cls,
+                "status": "waiting",
+                "start": datetime.utcnow() + timedelta(seconds=wait_sec),
+                "duration": None,
+                "participants": {},
+            }
+            self.next_start = None
+            self.jq.run_once(self._start, wait_sec)
+        except Exception as e:
+            print(f"Error in event scheduling: {e}")
+            self.curr = None
+            self.next_start = datetime.utcnow() + timedelta(seconds=MIN_WAIT)
+            self.jq.run_once(self._schedule_next, MIN_WAIT)
 
     async def _start(self, ctx):
-        ev = self.curr
-        ev["status"] = "active"
+        try:
+            ev = self.curr
+            ev["status"] = "active"
 
-        dur_sec = random.randint(MIN_DUR, MAX_DUR)
-        ev["duration"] = dur_sec
-        ev["end"] = datetime.utcnow() + timedelta(seconds=dur_sec)
+            dur_sec = random.randint(MIN_DUR, MAX_DUR)
+            ev["duration"] = dur_sec
+            ev["end"] = datetime.utcnow() + timedelta(seconds=dur_sec)
 
-        for cid, users in ev["participants"].items():
-            if not users:
-                continue
-            await ctx.bot.send_message(
-                cid, f"🚀 «{ev['name']}» начался! {fmt(dur_sec)}."
-            )
+            for cid, users in ev["participants"].items():
+                if not users:
+                    continue
+                await ctx.bot.send_message(
+                    cid, f"🚀 «{ev['name']}» начался! {fmt(dur_sec)}."
+                )
 
-        self.jq.run_once(self._finish, dur_sec)
+            self.jq.run_once(self._finish, dur_sec)
+        except Exception as e:
+            print(f"Error in event start: {e}")
+            self.curr = None
+            self.next_start = datetime.utcnow() + timedelta(seconds=MIN_WAIT)
+            self.jq.run_once(self._schedule_next, MIN_WAIT)
 
     async def _finish(self, ctx):
-        ev = self.curr
-        texts = ev["class"](ev["participants"]).finish()
+        try:
+            ev = self.curr
+            texts = ev["class"](ev["participants"]).finish()
 
-        for cid, users in ev["participants"].items():
-            if not users:
-                continue
-            await ctx.bot.send_message(
-                cid, f"🏁 «{ev['name']}» завершён!\n{texts[cid]}"
-            )
+            for cid, users in ev["participants"].items():
+                if not users:
+                    continue
+                await ctx.bot.send_message(
+                    cid, f"🏁 «{ev['name']}» завершён!\n{texts[cid]}"
+                )
 
-        ev["participants"].clear()
-        self.curr = None
+            ev["participants"].clear()
+            self.curr = None
 
-        gap_sec = random.randint(MIN_GAP, MAX_GAP)
-        self.next_start = datetime.utcnow() + timedelta(seconds=gap_sec)
-        self.jq.run_once(self._schedule_next, gap_sec)
+            gap_sec = random.randint(MIN_GAP, MAX_GAP)
+            self.next_start = datetime.utcnow() + timedelta(seconds=gap_sec)
+            self.jq.run_once(self._schedule_next, gap_sec)
+        except Exception as e:
+            print(f"Error in event finish: {e}")
+            self.curr = None
+            self.next_start = datetime.utcnow() + timedelta(seconds=MIN_WAIT)
+            self.jq.run_once(self._schedule_next, MIN_WAIT)
