@@ -47,7 +47,7 @@ class BanEvent(BaseEvent):
 
     PRIZES = [
         (
-            50,
+            100,
             [
                 "{name} так разошёлся с веником, что Никита заподозрил неладное {prize} очков за банный фетиш!",
                 "{name} упал на каменку и теперь у него «фирменный» узор на жопе {prize} очков за брендирование!",
@@ -62,7 +62,7 @@ class BanEvent(BaseEvent):
             ],
         ),
         (
-            30,
+            80,
             [
                 "{name} перепутал полотенце с простынёй и вышел «в платье» {prize} очков за банную моду!",
                 "{name} пытался охладиться, но сел на лёд и примёрз {prize} очков за эффект «поп-мороженое»!",
@@ -77,7 +77,7 @@ class BanEvent(BaseEvent):
             ],
         ),
         (
-            10,
+            50,
             [
                 "{name} перепутал веник с метлой и пытался «улететь» {prize} очков за банную магию!",
                 "{name} устроил «битву полотенцами» и проиграл {prize} очков за мокрое поражение!",
@@ -92,7 +92,7 @@ class BanEvent(BaseEvent):
             ],
         ),
         (
-            5,
+            30,
             [
                 "{name} сидел в углу и тихо парился, как монах {prize} очков за банную медитацию!",
                 "{name} уронил шапку для пара в лоханку {prize} очков за мокрый головной убор!",
@@ -107,7 +107,7 @@ class BanEvent(BaseEvent):
             ],
         ),
         (
-            -5,
+            -20,
             [
                 "{name} устроил потоп, забыв закрыть кран минус {prize} очков за подводную баню!",
                 "{name} принёс в парилку лампу с аромамаслами… это был бензин минус {prize} очков за пиротехническое шоу!",
@@ -144,7 +144,7 @@ class BanEvent(BaseEvent):
                     pl = get_player(s, uid, "", 0)
 
                     if pl.balance <= 20:
-                        pity = 20
+                        pity = 100
                         pl.balance += pity
                         lines.append(
                             f"Никите стало жаль {pl.first_name}: он пришёл даже без "
@@ -154,7 +154,7 @@ class BanEvent(BaseEvent):
 
                     inv = pl.items or {}
                     has_hat = str(ItemID.SAUNA_HAT) in inv
-                    bonus = 10 if has_hat else 0
+                    bonus = 30 if has_hat else 0
 
                     new_balance = pl.balance + prize + bonus
                     if new_balance < 0:
