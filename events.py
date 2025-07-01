@@ -1,7 +1,7 @@
 import os, random
 from datetime import datetime, timedelta
 from abc import ABC, abstractmethod
-from db import SessionLocal, get_player
+from db import SessionLocal, get_player_by_id
 from items import ItemID
 
 # Все интервалы в СЕКУНДАХ
@@ -141,7 +141,7 @@ class BanEvent(BaseEvent):
 
                 lines: list[str] = []
                 for uid, prize in zip(users, prizes):
-                    pl = get_player(s, uid, "", 0)
+                    pl = get_player_by_id(s, uid)
 
                     if pl.balance <= 20:
                         pity = 100

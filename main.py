@@ -1,25 +1,25 @@
-#!/usr/bin/env python3
 import os
 import asyncio
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     MessageHandler,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
-    Defaults,
     filters,
 )
 from db import SessionLocal, get_player, get_jackpot, get_chat, load_event_chats
 from models import PlayerModel
 from events import EventManager
 from items import get_item, ITEMS
+from games.rps import RPSGame
 
 TOKEN: str = os.getenv("BOT_TOKEN")
 SPIN_COST: int = int(os.getenv("SPIN_COST", "2"))
 JACKPOT_INCREMENT: int = int(os.getenv("JACKPOT_INCREMENT", "1"))
 JACKPOT_START: int = int(os.getenv("JACKPOT_START", "0"))
-START_BALANCE: int = int(os.getenv("START_BALANCE", "100"))
+
 MAP = [1, 2, 3, 0]
 
 
@@ -103,7 +103,7 @@ async def casino_spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     with SessionLocal() as db:
-        player = get_player(db, user.id, user.first_name, START_BALANCE)
+        player = get_player(db, user.id, user.first_name)
         jackpot_obj = get_jackpot(db, chat_id, JACKPOT_START)
 
         if player.balance < SPIN_COST:
@@ -184,7 +184,7 @@ async def jackpot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     with SessionLocal() as session:
-        player = get_player(session, user.id, user.first_name, START_BALANCE)
+        player = get_player(session, user.id, user.first_name)
         rank = (
             session.query(PlayerModel)
             .filter(PlayerModel.balance > player.balance)
@@ -243,7 +243,7 @@ async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     user = update.effective_user
     with SessionLocal() as s:
-        player = get_player(s, user.id, user.first_name, START_BALANCE)
+        player = get_player(s, user.id, user.first_name)
         cost = item.price * qty
         if player.balance < cost:
             await _reply_clean(update, context, "Недостаточно монет, дружок")
@@ -276,7 +276,7 @@ async def use_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     user = update.effective_user
     with SessionLocal() as s:
-        player = get_player(s, user.id, user.first_name, START_BALANCE)
+        player = get_player(s, user.id, user.first_name)
         have = (player.items or {}).get(str(item.id), 0)
         if have < qty:
             await _reply_clean(update, context, "У тебя нет такого количества, друг")
@@ -337,15 +337,17 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def after_init(app):
+    app.bot_data["games"] = {}
     app.bot_data["chats"] = load_event_chats()
     app.bot_data["mgr"] = EventManager(app)
 
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     import logging
 
     logging.exception("Ошибка в обработчике")
-    msg = update.effective_message
+
+    msg = getattr(update, "effective_message", None)
     if msg:
         try:
             await msg.reply_text("Произошла ошибка, попробуйте позже.")
@@ -371,6 +373,9 @@ def main() -> None:
     app.add_handler(CommandHandler("use", use_cmd))
     app.add_handler(CommandHandler("shop", shop_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
+
+    app.add_handler(CommandHandler("rps", RPSGame.start_game))
+    app.add_handler(CallbackQueryHandler(RPSGame.handle_callback, pattern=r"^rps_"))
 
     app.run_polling()
 

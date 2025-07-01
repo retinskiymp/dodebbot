@@ -3,6 +3,8 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker, scoped_session
 from models import Base, PlayerModel, ChatModel
 
+START_BALANCE: int = int(os.getenv("START_BALANCE", "100"))
+
 engine = create_engine(
     os.getenv("DB_URL", "sqlite:///data.db"),
     echo=False,
@@ -12,14 +14,21 @@ SessionLocal = scoped_session(sessionmaker(bind=engine, expire_on_commit=False))
 Base.metadata.create_all(bind=engine)
 
 
-def get_player(session, user_id, first_name, start_balance):
+def get_player(session, user_id, first_name):
     player = session.query(PlayerModel).filter_by(tg_id=user_id).first()
     if not player:
         player = PlayerModel(
-            tg_id=user_id, first_name=first_name, balance=start_balance
+            tg_id=user_id, first_name=first_name, balance=START_BALANCE
         )
         session.add(player)
         session.commit()
+    return player
+
+
+def get_player_by_id(session, user_id):
+    player = session.query(PlayerModel).filter_by(tg_id=user_id).first()
+    if not player:
+        raise ValueError(f"Player with tg id {user_id} does not exist")
     return player
 
 
