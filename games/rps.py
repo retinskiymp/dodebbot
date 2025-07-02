@@ -23,7 +23,7 @@ class RPSGame:
 
         try:
             with SessionLocal() as db:
-                player = get_player_by_id(db, user.id, chat_id)
+                player = get_player(db, user.id, chat_id, user.first_name)
             stake = int(context.args[0])
             if stake <= 0 or stake > player.balance:
                 raise ValueError
