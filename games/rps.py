@@ -11,7 +11,7 @@ GESTURES = {
 
 
 class RPSGame:
-    TIMEOUT = 3 * 60
+    TIMEOUT = 30
 
     @classmethod
     async def start_game(cls, update, context: ContextTypes.DEFAULT_TYPE):
@@ -22,12 +22,14 @@ class RPSGame:
             return await update.message.reply_text("В чате уже идёт игра!")
 
         try:
+            with SessionLocal() as db:
+                player = get_player_by_id(db, user.id, chat_id)
             stake = int(context.args[0])
-            if stake <= 0:
+            if stake <= 0 or stake > player.balance:
                 raise ValueError
         except (IndexError, ValueError):
             return await update.message.reply_text(
-                "Ставка должна быть положительным числом.\n"
+                "Недостаточно средств или неверный формат ввода\n"
                 "Использование: /rps <ставка>"
             )
 
@@ -70,7 +72,7 @@ class RPSGame:
                 )
 
             with SessionLocal() as db:
-                p = get_player(db, user.id, user.first_name)
+                p = get_player(db, user.id, chat_id, user.first_name)
                 if p.balance < game.stake:
                     return await q.answer(
                         "Недостаточно монет для участия", show_alert=True
@@ -176,10 +178,10 @@ class RPSGame:
 
             with SessionLocal() as db:
                 for uid in losers:
-                    p = get_player_by_id(db, uid)
+                    p = get_player_by_id(db, uid, self.chat_id)
                     p.balance -= self.stake
                 for uid in winners:
-                    p = get_player_by_id(db, uid)
+                    p = get_player_by_id(db, uid, self.chat_id)
                     p.balance += share
                 db.commit()
 

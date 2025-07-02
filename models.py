@@ -8,14 +8,16 @@ Base = declarative_base()
 class PlayerModel(Base):
     __tablename__ = "players"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    tg_id = Column(BigInteger, unique=True, nullable=False, index=True)
+    tg_id = Column(BigInteger, nullable=False, index=True)
+    room_id = Column(Integer, nullable=False, index=True)
     first_name = Column(String, nullable=False)
     balance = Column(Integer, default=5)
     items = Column(MutableDict.as_mutable(JSON), default=dict)
 
 
-class ChatModel(Base):
-    __tablename__ = "jackpots"
-    chat_id = Column(BigInteger, primary_key=True)
+class RoomModel(Base):
+    __tablename__ = "room"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chat_tg_id = Column(BigInteger, unique=True, nullable=False, index=True)
     jackpot = Column(Integer, default=10)
     events = Column(Boolean, default=False)

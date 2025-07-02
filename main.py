@@ -1,4 +1,3 @@
-import os
 import asyncio
 from telegram import Update
 from telegram.ext import (
@@ -9,16 +8,13 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from db import SessionLocal, get_player, get_jackpot, get_chat, load_event_chats
+from db import SessionLocal, get_player, get_jackpot, get_room, load_event_chats
 from models import PlayerModel
 from events import EventManager
 from items import get_item, ITEMS
 from games.rps import RPSGame
 
-TOKEN: str = os.getenv("BOT_TOKEN")
-SPIN_COST: int = int(os.getenv("SPIN_COST", "2"))
-JACKPOT_INCREMENT: int = int(os.getenv("JACKPOT_INCREMENT", "1"))
-JACKPOT_START: int = int(os.getenv("JACKPOT_START", "0"))
+from config import JACKPOT_START, JACKPOT_INCREMENT, SPIN_COST, TOKEN
 
 MAP = [1, 2, 3, 0]
 
@@ -103,8 +99,8 @@ async def casino_spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     with SessionLocal() as db:
-        player = get_player(db, user.id, user.first_name)
-        jackpot_obj = get_jackpot(db, chat_id, JACKPOT_START)
+        player = get_player(db, user.id, chat_id, user.first_name)
+        room = get_room(db, chat_id)
 
         if player.balance < SPIN_COST:
             await _reply_clean(
@@ -118,20 +114,19 @@ async def casino_spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_jack, prize = _calc_prize(val, symbols, symbols.count(0))
 
         if not is_jack:
-            jackpot_obj.jackpot += JACKPOT_INCREMENT
+            room.jackpot += JACKPOT_INCREMENT
         else:
-            prize += jackpot_obj.jackpot
-            jackpot_before = jackpot_obj.jackpot
-            jackpot_obj.jackpot = JACKPOT_START
+            prize += room.jackpot
+            jackpot_before = room.jackpot
+            room.jackpot = JACKPOT_START
 
         player.balance += prize
         profit = prize - SPIN_COST
         balance = player.balance
         db.commit()
-        current_jackpot = jackpot_obj.jackpot
+        current_jackpot = room.jackpot
 
-    # удаляем предыдущие
-    for key in ("last_slot_id", "last_bot_id", "last_user_id"):
+    for key in ("last_bot_id", "last_slot_id", "last_user_id"):
         mid = context.user_data.pop(key, None)
         if mid:
             try:
@@ -147,8 +142,7 @@ async def casino_spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["last_bot_id"] = bot_msg.message_id
 
     if is_jack and jackpot_before:
-        await safe_reply(
-            bot_msg,
+        await update.effective_chat.send_message(
             f"🎉 {user.first_name} сорвал джекпот — {jackpot_before:,} монет! 🎉",
         )
 
@@ -177,20 +171,23 @@ async def event_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def jackpot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with SessionLocal() as session:
-        jp = get_jackpot(session, update.effective_chat.id, JACKPOT_START).jackpot
+        jp = get_jackpot(session, update.effective_chat.id)
     await _reply_clean(update, context, f"🎯 Текущий джек-пот: {jp} очков")
 
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    chat_id = update.effective_chat.id
     with SessionLocal() as session:
-        player = get_player(session, user.id, user.first_name)
-        rank = (
+        player = get_player(session, user.id, chat_id, user.first_name)
+        higher_count = (
             session.query(PlayerModel)
-            .filter(PlayerModel.balance > player.balance)
+            .filter(
+                PlayerModel.room_id == chat_id, PlayerModel.balance > player.balance
+            )
             .count()
-            + 1
         )
+        rank = higher_count + 1
         inv = player.items or {}
         if inv:
             inv_lines = []
@@ -211,9 +208,11 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
     with SessionLocal() as session:
         top = (
             session.query(PlayerModel)
+            .filter(PlayerModel.room_id == chat_id)
             .order_by(PlayerModel.balance.desc())
             .limit(10)
             .all()
@@ -242,8 +241,9 @@ async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _reply_clean(update, context, "Неизвестный товар")
         return
     user = update.effective_user
+    chat_id = update.effective_chat.id
     with SessionLocal() as s:
-        player = get_player(s, user.id, user.first_name)
+        player = get_player(s, user.id, chat_id, user.first_name)
         cost = item.price * qty
         if player.balance < cost:
             await _reply_clean(update, context, "Недостаточно монет, дружок")
@@ -275,8 +275,9 @@ async def use_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _reply_clean(update, context, "Неизвестный предмет")
         return
     user = update.effective_user
+    chat_id = update.effective_chat.id
     with SessionLocal() as s:
-        player = get_player(s, user.id, user.first_name)
+        player = get_player(s, user.id, chat_id, user.first_name)
         have = (player.items or {}).get(str(item.id), 0)
         if have < qty:
             await _reply_clean(update, context, "У тебя нет такого количества, друг")
@@ -306,7 +307,7 @@ async def register_chat_for_events_cmd(
         await _reply_clean(update, context, "Этот чат уже зарегистрирован для ивентов.")
         return
     with SessionLocal() as session:
-        chat_model = get_chat(session, chat_id)
+        chat_model = get_room(session, chat_id)
         chat_model.events = True
         context.application.bot_data.setdefault("chats", set()).add(chat_id)
         session.commit()
@@ -330,6 +331,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🛍️  /shop - список товаров магазина\n"
         "💰  /buy <i>id</i> [n] - купить товар (по умолчанию 1 шт.)\n"
         "🎒  /use <i>id</i> [n] - использовать товар из инвентаря\n"
+        "\n"
+        "✊  /rps - начать игру Камень–Ножницы–Бумага с ставкой\n"
         "\n"
         "⚙️  /register_chat_for_events - подключить чат к ивентам\n"
     )
@@ -374,7 +377,23 @@ def main() -> None:
     app.add_handler(CommandHandler("shop", shop_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
 
-    app.add_handler(CommandHandler("rps", RPSGame.start_game))
+    app.add_handler(
+        CommandHandler(
+            [
+                "stone",
+                "paper",
+                "scissors",
+                "rps",
+                "rsp",
+                "srp",
+                "spr",
+                "psr",
+                "prs",
+                "ppc",
+            ],
+            RPSGame.start_game,
+        )
+    )
     app.add_handler(CallbackQueryHandler(RPSGame.handle_callback, pattern=r"^rps_"))
 
     app.run_polling()

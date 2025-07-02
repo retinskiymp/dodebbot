@@ -90,8 +90,6 @@ class SaunaHat(Item):
 
     def use(self, player: "PlayerModel", qty: int = 1) -> str:
         self._assert_positive(qty)
-        if qty != 1:
-            raise ValueError("Шапочку используют по одной")
         return "Не волнуйся, она всегда с тобой, просто иди в баньку"
 
 

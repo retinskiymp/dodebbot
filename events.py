@@ -34,11 +34,7 @@ class BaseEvent(ABC):
         self.participants = participants
 
     @abstractmethod
-    def finish(self) -> dict[int, str]:
-        """
-        Вернуть {chat_id: текст}, который будет разослан в каждый чат.
-        Метод может начислять награды игрокам.
-        """
+    def finish(self) -> dict[int, str]: ...
 
 
 class BanEvent(BaseEvent):
@@ -47,7 +43,7 @@ class BanEvent(BaseEvent):
 
     PRIZES = [
         (
-            100,
+            200,
             [
                 "{name} так разошёлся с веником, что Никита заподозрил неладное {prize} очков за банный фетиш!",
                 "{name} упал на каменку и теперь у него «фирменный» узор на жопе {prize} очков за брендирование!",
@@ -62,7 +58,7 @@ class BanEvent(BaseEvent):
             ],
         ),
         (
-            80,
+            150,
             [
                 "{name} перепутал полотенце с простынёй и вышел «в платье» {prize} очков за банную моду!",
                 "{name} пытался охладиться, но сел на лёд и примёрз {prize} очков за эффект «поп-мороженое»!",
@@ -77,7 +73,7 @@ class BanEvent(BaseEvent):
             ],
         ),
         (
-            50,
+            100,
             [
                 "{name} перепутал веник с метлой и пытался «улететь» {prize} очков за банную магию!",
                 "{name} устроил «битву полотенцами» и проиграл {prize} очков за мокрое поражение!",
@@ -92,7 +88,7 @@ class BanEvent(BaseEvent):
             ],
         ),
         (
-            30,
+            50,
             [
                 "{name} сидел в углу и тихо парился, как монах {prize} очков за банную медитацию!",
                 "{name} уронил шапку для пара в лоханку {prize} очков за мокрый головной убор!",
@@ -141,7 +137,7 @@ class BanEvent(BaseEvent):
 
                 lines: list[str] = []
                 for uid, prize in zip(users, prizes):
-                    pl = get_player_by_id(s, uid)
+                    pl = get_player_by_id(s, uid, chat_id)
 
                     if pl.balance <= 20:
                         pity = 100
