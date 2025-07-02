@@ -65,7 +65,7 @@ class LootBox(Item):
     stackable = True
 
     REWARD_MIN = 50
-    REWARD_MAX = 150
+    REWARD_MAX = 140
 
     def use(self, player: "PlayerModel", qty: int = 1) -> str:
         self._assert_positive(qty)
