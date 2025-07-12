@@ -8,9 +8,8 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from db import SessionLocal, get_player, get_jackpot, get_room, load_event_chats
+from db import SessionLocal, get_player, get_room, load_event_chats
 from models import PlayerModel
-from items import get_item, ITEMS
 from games.rps import RPSGame
 from games.bjack import register_handlers as register_bjack_handlers
 
@@ -91,13 +90,6 @@ async def casino_spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     dice_msg = update.effective_message
 
-    # mgr: EventManager = context.application.bot_data["mgr"]
-    # if mgr.is_active_participant(chat_id, user.id):
-    #     await _reply_clean(
-    #         update, context, "🚧 Ты участвуешь в ивенте — дождись окончания."
-    #     )
-    #     return
-
     with SessionLocal() as db:
         player = get_player(db, user.id, chat_id, user.first_name)
         room = get_room(db, chat_id)
@@ -113,18 +105,10 @@ async def casino_spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         symbols = _decode(val)
         is_jack, prize = _calc_prize(val, symbols, symbols.count(0))
 
-        if not is_jack:
-            room.jackpot += JACKPOT_INCREMENT
-        else:
-            prize += room.jackpot
-            jackpot_before = room.jackpot
-            room.jackpot = JACKPOT_START
-
         player.balance += prize
         profit = prize - SPIN_COST
         balance = player.balance
         db.commit()
-        current_jackpot = room.jackpot
 
     for key in ("last_bot_id", "last_slot_id", "last_user_id"):
         mid = context.user_data.pop(key, None)
@@ -135,16 +119,11 @@ async def casino_spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
     trend = "🤑" if profit > 0 else "💀" if profit < 0 else "😑"
-    text = f"🏦: {balance:,} | {trend} {profit:+,} | 🎰 {current_jackpot:,}"
+    text = f"🏦: {balance:,} | {trend} {profit:+,}"
 
     bot_msg = await safe_reply(dice_msg, text)
     context.user_data["last_slot_id"] = dice_msg.message_id
     context.user_data["last_bot_id"] = bot_msg.message_id
-
-    if is_jack and jackpot_before:
-        await update.effective_chat.send_message(
-            f"🎉 {user.first_name} сорвал джекпот — {jackpot_before:,} монет! 🎉",
-        )
 
 
 # async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -169,10 +148,10 @@ async def casino_spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #     await _reply_clean(update, context, info)
 
 
-async def jackpot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    with SessionLocal() as session:
-        jp = get_jackpot(session, update.effective_chat.id)
-    await _reply_clean(update, context, f"🎯 Текущий джек-пот: {jp} очков")
+# async def jackpot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     with SessionLocal() as session:
+#         jp = get_jackpot(session, update.effective_chat.id)
+#     await _reply_clean(update, context, f"🎯 Текущий джек-пот: {jp} очков")
 
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -188,21 +167,10 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             .count()
         )
         rank = higher_count + 1
-        inv = player.items or {}
-        if inv:
-            inv_lines = []
-            for id_str, qty in inv.items():
-                item_obj = ITEMS.get(int(id_str))
-                name = item_obj.name if item_obj else f"ID {id_str}"
-                inv_lines.append(f"• (ID:{id_str}) {name} × {qty}")
-            inv_block = "🎒 Инвентарь:\n" + "\n".join(inv_lines)
-        else:
-            inv_block = "🎒 Инвентарь пуст"
     msg = (
         f"👽 {player.first_name} (id:{player.id})\n"
         f"🏦 Баланс: {player.balance:,}\n"
         f"📊 Место в топе: {rank}\n\n"
-        f"{inv_block}"
     )
     await _reply_clean(update, context, msg)
 
@@ -226,77 +194,77 @@ async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _reply_clean(update, context, "\n".join(lines))
 
 
-async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await _reply_clean(update, context, "Использование: /buy <id> [кол-во]")
-        return
-    try:
-        item_id = int(context.args[0])
-        qty = int(context.args[1]) if len(context.args) > 1 else 1
-    except ValueError:
-        await _reply_clean(update, context, "id и количество должны быть числами")
-        return
-    item = get_item(item_id)
-    if not item:
-        await _reply_clean(update, context, "Неизвестный товар")
-        return
-    user = update.effective_user
-    chat_id = update.effective_chat.id
-    with SessionLocal() as s:
-        player = get_player(s, user.id, chat_id, user.first_name)
-        cost = item.price * qty
-        if player.balance < cost:
-            await _reply_clean(update, context, "Недостаточно монет, дружок")
-            return
-        try:
-            item.buy(player, qty)
-        except ValueError as e:
-            await _reply_clean(update, context, str(e))
-            return
-        player.balance -= cost
-        s.commit()
-    await _reply_clean(
-        update, context, f"🛒 Куплено: {item.name} ×{qty} за {cost} монет"
-    )
+# async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     if not context.args:
+#         await _reply_clean(update, context, "Использование: /buy <id> [кол-во]")
+#         return
+#     try:
+#         item_id = int(context.args[0])
+#         qty = int(context.args[1]) if len(context.args) > 1 else 1
+#     except ValueError:
+#         await _reply_clean(update, context, "id и количество должны быть числами")
+#         return
+#     item = get_item(item_id)
+#     if not item:
+#         await _reply_clean(update, context, "Неизвестный товар")
+#         return
+#     user = update.effective_user
+#     chat_id = update.effective_chat.id
+#     with SessionLocal() as s:
+#         player = get_player(s, user.id, chat_id, user.first_name)
+#         cost = item.price * qty
+#         if player.balance < cost:
+#             await _reply_clean(update, context, "Недостаточно монет, дружок")
+#             return
+#         try:
+#             item.buy(player, qty)
+#         except ValueError as e:
+#             await _reply_clean(update, context, str(e))
+#             return
+#         player.balance -= cost
+#         s.commit()
+#     await _reply_clean(
+#         update, context, f"🛒 Куплено: {item.name} ×{qty} за {cost} монет"
+#     )
 
 
-async def use_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await _reply_clean(update, context, "Использование: /use <id> [кол-во]")
-        return
-    try:
-        item_id = int(context.args[0])
-        qty = int(context.args[1]) if len(context.args) > 1 else 1
-    except ValueError:
-        await _reply_clean(update, context, "id и количество должны быть числами")
-        return
-    item = get_item(item_id)
-    if not item:
-        await _reply_clean(update, context, "Неизвестный предмет")
-        return
-    user = update.effective_user
-    chat_id = update.effective_chat.id
-    with SessionLocal() as s:
-        player = get_player(s, user.id, chat_id, user.first_name)
-        have = (player.items or {}).get(str(item.id), 0)
-        if have < qty:
-            await _reply_clean(update, context, "У тебя нет такого количества, друг")
-            return
-        try:
-            msg = item.use(player, qty)
-        except ValueError as e:
-            await _reply_clean(update, context, str(e))
-            return
-        s.commit()
-    await _reply_clean(update, context, msg)
+# async def use_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     if not context.args:
+#         await _reply_clean(update, context, "Использование: /use <id> [кол-во]")
+#         return
+#     try:
+#         item_id = int(context.args[0])
+#         qty = int(context.args[1]) if len(context.args) > 1 else 1
+#     except ValueError:
+#         await _reply_clean(update, context, "id и количество должны быть числами")
+#         return
+#     item = get_item(item_id)
+#     if not item:
+#         await _reply_clean(update, context, "Неизвестный предмет")
+#         return
+#     user = update.effective_user
+#     chat_id = update.effective_chat.id
+#     with SessionLocal() as s:
+#         player = get_player(s, user.id, chat_id, user.first_name)
+#         have = (player.items or {}).get(str(item.id), 0)
+#         if have < qty:
+#             await _reply_clean(update, context, "У тебя нет такого количества, друг")
+#             return
+#         try:
+#             msg = item.use(player, qty)
+#         except ValueError as e:
+#             await _reply_clean(update, context, str(e))
+#             return
+#         s.commit()
+#     await _reply_clean(update, context, msg)
 
 
-async def shop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lines = ["🛍 Доступные товарчики:"]
-    for item_id in sorted(ITEMS):
-        it = ITEMS[item_id]
-        lines.append(f"ID:{item_id}. {it.name} — {it.price} монет\n📜 {it.desc}")
-    await _reply_clean(update, context, "\n".join(lines))
+# async def shop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     lines = ["🛍 Доступные товарчики:"]
+#     for item_id in sorted(ITEMS):
+#         it = ITEMS[item_id]
+#         lines.append(f"ID:{item_id}. {it.name} — {it.price} монет\n📜 {it.desc}")
+#     await _reply_clean(update, context, "\n".join(lines))
 
 
 async def microzaim_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -340,13 +308,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "\n"
         "🎰 <b>Слот-машина</b> — просто пришлите в чат.\n"
         "\n"
-        "🎯  /jackpot - размер джек-пота в чате\n"
-        "\n"
         "👤  /status /st - ваш баланс, место и инвентарь\n"
         "🏆  /top /t - топ-10 игроков по балансу\n"
-        "🛍️  /shop /sh - список товаров магазина\n"
-        "💰  /buy /b <i>id</i> [n] - купить товар (по умолчанию 1 шт.)\n"
-        "🎒  /use /u <i>id</i> [n] - использовать товар из инвентаря\n"
         "💳  /microzaim /mz - взять микрозайм (если нет денег)\n"
         "\n"
         "✊  /rps - начать игру Камень–Ножницы–Бумага с ставкой\n"
@@ -381,21 +344,10 @@ def main() -> None:
     slot_filter = filters.Dice.SLOT_MACHINE & ~filters.FORWARDED
     app.add_handler(MessageHandler(slot_filter, casino_spin))
 
-    app.add_handler(CommandHandler(["jackpot", "j", "ochko"], jackpot_cmd))
-
     app.add_handler(CommandHandler(["status", "st"], status_cmd))
     app.add_handler(CommandHandler(["top", "t"], top_cmd))
-    app.add_handler(CommandHandler(["buy", "b"], buy_cmd))
-    app.add_handler(CommandHandler(["use", "u"], use_cmd))
-    app.add_handler(CommandHandler(["shop", "sh"], shop_cmd))
     app.add_handler(CommandHandler(["help", "h"], help_cmd))
     app.add_handler(CommandHandler(["microzaim", "mz"], microzaim_cmd))
-
-    # app.add_handler(CommandHandler("join", join_cmd))
-    # app.add_handler(CommandHandler(["event", "events", "e"], event_info_cmd))
-    # app.add_handler(
-    #     CommandHandler("register_chat_for_events", register_chat_for_events_cmd)
-    # )
 
     app.add_handler(
         CommandHandler(
