@@ -305,7 +305,7 @@ async def microzaim_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with SessionLocal() as session:
         money = 50
         player = get_player(session, user.id, chat_id, user.first_name)
-        if player.balance > 0:
+        if player.balance > SPIN_COST:
             await _reply_clean(
                 update, context, "💰 У тебя еще есть деньги, друг, одумайся"
             )
