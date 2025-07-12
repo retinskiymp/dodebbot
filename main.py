@@ -10,7 +10,6 @@ from telegram.ext import (
 )
 from db import SessionLocal, get_player, get_jackpot, get_room, load_event_chats
 from models import PlayerModel
-from events import EventManager
 from items import get_item, ITEMS
 from games.rps import RPSGame
 from games.bjack import register_handlers as register_bjack_handlers
@@ -92,12 +91,12 @@ async def casino_spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     dice_msg = update.effective_message
 
-    mgr: EventManager = context.application.bot_data["mgr"]
-    if mgr.is_active_participant(chat_id, user.id):
-        await _reply_clean(
-            update, context, "🚧 Ты участвуешь в ивенте — дождись окончания."
-        )
-        return
+    # mgr: EventManager = context.application.bot_data["mgr"]
+    # if mgr.is_active_participant(chat_id, user.id):
+    #     await _reply_clean(
+    #         update, context, "🚧 Ты участвуешь в ивенте — дождись окончания."
+    #     )
+    #     return
 
     with SessionLocal() as db:
         player = get_player(db, user.id, chat_id, user.first_name)
@@ -148,26 +147,26 @@ async def casino_spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not _is_chat_registered_for_events(update.effective_chat.id, context):
-        await _reply_clean(update, context, "Чат не участвует в ивентах.")
-        return
-    ev_id = context.args[0].lower() if context.args else None
-    ok, msg = context.application.bot_data["mgr"].join(
-        update.effective_chat.id,
-        update.effective_user.id,
-        ev_id,
-        update.effective_user.first_name,
-    )
-    await _reply_clean(update, context, msg)
+# async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     if not _is_chat_registered_for_events(update.effective_chat.id, context):
+#         await _reply_clean(update, context, "Чат не участвует в ивентах.")
+#         return
+#     ev_id = context.args[0].lower() if context.args else None
+#     ok, msg = context.application.bot_data["mgr"].join(
+#         update.effective_chat.id,
+#         update.effective_user.id,
+#         ev_id,
+#         update.effective_user.first_name,
+#     )
+#     await _reply_clean(update, context, msg)
 
 
-async def event_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not _is_chat_registered_for_events(update.effective_chat.id, context):
-        await _reply_clean(update, context, "Чат не участвует в ивентах.")
-        return
-    info = context.application.bot_data["mgr"].info()
-    await _reply_clean(update, context, info)
+# async def event_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     if not _is_chat_registered_for_events(update.effective_chat.id, context):
+#         await _reply_clean(update, context, "Чат не участвует в ивентах.")
+#         return
+#     info = context.application.bot_data["mgr"].info()
+#     await _reply_clean(update, context, info)
 
 
 async def jackpot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -341,19 +340,17 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "\n"
         "🎰 <b>Слот-машина</b> — просто пришлите в чат.\n"
         "\n"
-        "🛎️  /join - присоединиться к текущему ивенту\n"
-        "📅  /event(s) - информация о ивентах\n"
         "🎯  /jackpot - размер джек-пота в чате\n"
         "\n"
-        "👤  /status - ваш баланс, место и инвентарь\n"
-        "🏆  /top - топ-10 игроков по балансу\n"
-        "🛍️  /shop - список товаров магазина\n"
-        "💰  /buy <i>id</i> [n] - купить товар (по умолчанию 1 шт.)\n"
-        "🎒  /use <i>id</i> [n] - использовать товар из инвентаря\n"
+        "👤  /status /st - ваш баланс, место и инвентарь\n"
+        "🏆  /top /t - топ-10 игроков по балансу\n"
+        "🛍️  /shop /sh - список товаров магазина\n"
+        "💰  /buy /b <i>id</i> [n] - купить товар (по умолчанию 1 шт.)\n"
+        "🎒  /use /u <i>id</i> [n] - использовать товар из инвентаря\n"
+        "💳  /microzaim /mz - взять микрозайм (если нет денег)\n"
         "\n"
         "✊  /rps - начать игру Камень–Ножницы–Бумага с ставкой\n"
-        "\n"
-        "⚙️  /register_chat_for_events - подключить чат к ивентам\n"
+        "🃏  /blackjack /bj - начать игру в блэкджек\n"
     )
     await update.effective_message.reply_text(help_text, parse_mode="HTML")
 
@@ -361,7 +358,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def after_init(app):
     app.bot_data["games"] = {}
     app.bot_data["chats"] = load_event_chats()
-    app.bot_data["mgr"] = EventManager(app)
+    # app.bot_data["mgr"] = EventManager(app)
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
@@ -383,12 +380,9 @@ def main() -> None:
 
     slot_filter = filters.Dice.SLOT_MACHINE & ~filters.FORWARDED
     app.add_handler(MessageHandler(slot_filter, casino_spin))
-    app.add_handler(CommandHandler("join", join_cmd))
-    app.add_handler(CommandHandler(["event", "events", "e"], event_info_cmd))
+
     app.add_handler(CommandHandler(["jackpot", "j", "ochko"], jackpot_cmd))
-    app.add_handler(
-        CommandHandler("register_chat_for_events", register_chat_for_events_cmd)
-    )
+
     app.add_handler(CommandHandler(["status", "st"], status_cmd))
     app.add_handler(CommandHandler(["top", "t"], top_cmd))
     app.add_handler(CommandHandler(["buy", "b"], buy_cmd))
@@ -396,6 +390,12 @@ def main() -> None:
     app.add_handler(CommandHandler(["shop", "sh"], shop_cmd))
     app.add_handler(CommandHandler(["help", "h"], help_cmd))
     app.add_handler(CommandHandler(["microzaim", "mz"], microzaim_cmd))
+
+    # app.add_handler(CommandHandler("join", join_cmd))
+    # app.add_handler(CommandHandler(["event", "events", "e"], event_info_cmd))
+    # app.add_handler(
+    #     CommandHandler("register_chat_for_events", register_chat_for_events_cmd)
+    # )
 
     app.add_handler(
         CommandHandler(

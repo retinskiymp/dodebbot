@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 from enum import IntEnum, unique
-from typing import TYPE_CHECKING, Dict
+from typing import TYPE_CHECKING, Dict, List
 
 if TYPE_CHECKING:
     from models import PlayerModel
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 @unique
 class ItemID(IntEnum):
     LOOTBOX = 1
-    SAUNA_HAT = 2
+    PRESTIJE = 2
 
 
 def _inv(player: "PlayerModel") -> Dict[str, int]:
@@ -64,38 +64,40 @@ class LootBox(Item):
     price = 100
     stackable = True
 
-    REWARD_MIN = 50
-    REWARD_MAX = 140
+    REWARDS: List[int] = [0, 50, 100, 150, 500, 1000, 10000]
+    WEIGHTS: List[float] = [39, 30, 15, 10, 3, 2, 1]
 
     def use(self, player: "PlayerModel", qty: int = 1) -> str:
         self._assert_positive(qty)
         self._change_amount(player, self.id, -qty)
-        total = sum(
-            random.randint(self.REWARD_MIN, self.REWARD_MAX) for _ in range(qty)
-        )
+
+        prizes = random.choices(self.REWARDS, weights=self.WEIGHTS, k=qty)
+
+        total = sum(prizes)
         player.balance += total
-        return f"🎁 Открыто боксов: {qty}, награда {total} монет"
+
+        return f"🎁 Открыто лутбоксов: {qty}, награда {total} монет"
 
 
-class SaunaHat(Item):
-    id = ItemID.SAUNA_HAT
-    name = "🎩 Шапочка для бани"
-    desc = "Никите нравятся ответственные люди, а ты ведь ответственный, да? Поди защитит тебя от неприятных последствий баньки"
-    price = 500
-    stackable = False
+class PrestigeHat(Item):
+    id = ItemID.PRESTIJE
+    name = "👑 Престиж"
+    desc = "Просто показать всем, что ты крутой, можешь купить несколько, чтобы быть ещё круче"
+    price = 1000
+    stackable = True
 
     def buy(self, player: "PlayerModel", qty: int = 1) -> None:
         self._assert_positive(qty)
-        super().buy(player, 1)
+        super().buy(player, qty)
 
     def use(self, player: "PlayerModel", qty: int = 1) -> str:
         self._assert_positive(qty)
-        return "Не волнуйся, она всегда с тобой, просто иди в баньку"
+        return "Это просто шляпа, она не даёт никаких бонусов, но выглядит круто!"
 
 
 ITEMS: Dict[int, Item] = {
     ItemID.LOOTBOX: LootBox(),
-    ItemID.SAUNA_HAT: SaunaHat(),
+    ItemID.PRESTIJE: PrestigeHat(),
 }
 
 

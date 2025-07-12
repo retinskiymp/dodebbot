@@ -238,7 +238,7 @@ class BlackjackGame:
                 results.append(res)
             db.commit()
 
-        footer = "\n" + "\n".join(results) + f"\nНовая игра через {RESTART_DELAY} сек"
+        footer = "\n" + "\n".join(results) + f"\n\nНовая игра через {RESTART_DELAY} сек"
         self.stage = Stage.END
         await self.update_table(header="📊 Результаты раунда", footer=footer)
 
