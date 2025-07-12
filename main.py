@@ -13,6 +13,7 @@ from models import PlayerModel
 from events import EventManager
 from items import get_item, ITEMS
 from games.rps import RPSGame
+from games.bjack import register_handlers as register_bjack_handlers
 
 from config import JACKPOT_START, JACKPOT_INCREMENT, SPIN_COST, TOKEN
 
@@ -395,6 +396,8 @@ def main() -> None:
         )
     )
     app.add_handler(CallbackQueryHandler(RPSGame.handle_callback, pattern=r"^rps_"))
+
+    register_bjack_handlers(app)
 
     app.run_polling()
 
