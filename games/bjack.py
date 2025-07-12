@@ -80,14 +80,14 @@ class BlackjackGame:
     @classmethod
     @safe_game_method
     async def start(cls, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.effective_chat.id in context.application.bot_data.get("bj_games", {}):
+        if update.effective_chat.id in context.application.bot_data.get("games", {}):
             return await update.message.reply_text("Игра уже идет в этом чате.")
         msg = await update.message.reply_text(
             "♠ BLACKJACK: ожидание ставок в течение 10 секунд",
             reply_markup=cls._build_bet_keyboard(),
         )
         game = cls(update.effective_chat.id, msg.message_id, context)
-        context.application.bot_data.setdefault("bj_games", {})[msg.chat.id] = game
+        context.application.bot_data.setdefault("games", {})[msg.chat.id] = game
         game.dealer["hand"] = []
         await game.update_table()
         game.timer = context.job_queue.run_once(
@@ -321,7 +321,7 @@ class BlackjackGame:
                 self.timer.schedule_removal()
             except:
                 pass
-        self.ctx.application.bot_data["bj_games"].pop(self.chat_id, None)
+        self.ctx.application.bot_data["games"].pop(self.chat_id, None)
 
 
 def register_handlers(app):
@@ -329,7 +329,7 @@ def register_handlers(app):
     app.add_handler(
         CallbackQueryHandler(
             lambda u, c: asyncio.create_task(
-                c.application.bot_data["bj_games"][u.effective_chat.id].handle_bet(u, c)
+                c.application.bot_data["games"][u.effective_chat.id].handle_bet(u, c)
             ),
             pattern="^bj_bet_",
         )
@@ -337,9 +337,7 @@ def register_handlers(app):
     app.add_handler(
         CallbackQueryHandler(
             lambda u, c: asyncio.create_task(
-                c.application.bot_data["bj_games"][u.effective_chat.id].handle_action(
-                    u, c
-                )
+                c.application.bot_data["games"][u.effective_chat.id].handle_action(u, c)
             ),
             pattern="^bj_act_",
         )
