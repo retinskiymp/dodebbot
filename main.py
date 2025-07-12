@@ -300,6 +300,24 @@ async def shop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _reply_clean(update, context, "\n".join(lines))
 
 
+async def microzaim_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    chat_id = update.effective_chat.id
+    with SessionLocal() as session:
+        money = 50
+        player = get_player(session, user.id, chat_id, user.first_name)
+        if player.balance > 0:
+            await _reply_clean(
+                update, context, "💰 У тебя еще есть деньги, друг, одумайся"
+            )
+            return
+        player.balance = money
+        session.commit()
+    await _reply_clean(
+        update, context, f"✅ {user.first_name}, тебе выдан микрозайм на {money} монет!"
+    )
+
+
 async def register_chat_for_events_cmd(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ):
@@ -366,17 +384,18 @@ def main() -> None:
     slot_filter = filters.Dice.SLOT_MACHINE & ~filters.FORWARDED
     app.add_handler(MessageHandler(slot_filter, casino_spin))
     app.add_handler(CommandHandler("join", join_cmd))
-    app.add_handler(CommandHandler(["event", "events"], event_info_cmd))
-    app.add_handler(CommandHandler(["jackpot", "ochko"], jackpot_cmd))
+    app.add_handler(CommandHandler(["event", "events", "e"], event_info_cmd))
+    app.add_handler(CommandHandler(["jackpot", "j", "ochko"], jackpot_cmd))
     app.add_handler(
         CommandHandler("register_chat_for_events", register_chat_for_events_cmd)
     )
-    app.add_handler(CommandHandler("status", status_cmd))
-    app.add_handler(CommandHandler("top", top_cmd))
-    app.add_handler(CommandHandler("buy", buy_cmd))
-    app.add_handler(CommandHandler("use", use_cmd))
-    app.add_handler(CommandHandler("shop", shop_cmd))
-    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler(["status", "st"], status_cmd))
+    app.add_handler(CommandHandler(["top", "t"], top_cmd))
+    app.add_handler(CommandHandler(["buy", "b"], buy_cmd))
+    app.add_handler(CommandHandler(["use", "u"], use_cmd))
+    app.add_handler(CommandHandler(["shop", "sh"], shop_cmd))
+    app.add_handler(CommandHandler(["help", "h"], help_cmd))
+    app.add_handler(CommandHandler(["microzaim", "mz"], microzaim_cmd))
 
     app.add_handler(
         CommandHandler(
