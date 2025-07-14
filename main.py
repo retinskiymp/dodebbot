@@ -13,7 +13,7 @@ from models import PlayerModel
 from games.rps import RPSGame
 from games.bjack import register_handlers as register_bjack_handlers
 
-from config import JACKPOT_START, JACKPOT_INCREMENT, SPIN_COST, TOKEN
+from config import FREE_MONEY, SPIN_COST, TOKEN
 
 MAP = [1, 2, 3, 0]
 
@@ -271,7 +271,7 @@ async def microzaim_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat_id = update.effective_chat.id
     with SessionLocal() as session:
-        money = 50
+        money = FREE_MONEY
         player = get_player(session, user.id, chat_id, user.first_name)
         if player.balance > SPIN_COST:
             await _reply_clean(

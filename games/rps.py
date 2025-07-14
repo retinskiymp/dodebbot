@@ -1,6 +1,7 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from events import EventManager
+from config import FREE_MONEY
 from db import SessionLocal, get_player, get_player_by_id
 
 GESTURES = {
@@ -25,11 +26,13 @@ class RPSGame:
             with SessionLocal() as db:
                 player = get_player(db, user.id, chat_id, user.first_name)
             stake = int(context.args[0])
-            if stake <= 0 or stake > player.balance:
+            if stake <= 0 or stake > player.balance or stake < FREE_MONEY * 3:
                 raise ValueError
         except (IndexError, ValueError):
             return await update.message.reply_text(
                 "Недостаточно средств или неверный формат ввода\n"
+                "Минимальная ставка: "
+                f"{FREE_MONEY * 3} монет\n"
                 "Использование: /rps <ставка>"
             )
 
