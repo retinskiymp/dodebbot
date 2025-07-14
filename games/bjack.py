@@ -6,6 +6,7 @@ from collections import defaultdict
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CallbackQueryHandler, CommandHandler
 from db import SessionLocal, get_player
+from config import BJ_RESTART, FREE_MONEY
 
 
 def safe_game_method(func):
@@ -13,11 +14,14 @@ def safe_game_method(func):
     async def wrapper(self, *args, **kwargs):
         try:
             return await func(self, *args, **kwargs)
-        except Exception:
-            self.cleanup()
+        except Exception as e:
             await self.ctx.bot.send_message(
-                self.chat_id, f"Произошла ошибка в {func.__name__}."
+                chat_id=self.chat_id, text=f"Произошла ошибка в {func.__name__}: {e}"
             )
+            import traceback
+
+            traceback.print_exc()
+            self.cleanup()
 
     return wrapper
 
@@ -26,11 +30,12 @@ class Stage(Enum):
     BET = "bet"
     PLAY = "play"
     END = "end"
+    CLOSE = "close"
 
 
-BET_TIMEOUT = 10  # секунд на прием ставок
-ACTION_TIMEOUT = 20  # секунд на ход игрока
-RESTART_DELAY = 15  # секунд до новой игры
+BET_TIMEOUT = BJ_RESTART
+ACTION_TIMEOUT = 20
+RESTART_DELAY = BJ_RESTART
 
 FIXED_BETS = [50, 100, 200, 300, 500]
 PERCENT_BETS = [10, 20, 30, 50, 100]
@@ -82,14 +87,18 @@ class BlackjackGame:
     async def start(cls, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_chat.id in context.application.bot_data.get("games", {}):
             return await update.message.reply_text("Игра уже идет в этом чате.")
+
         msg = await update.message.reply_text(
-            "♠ BLACKJACK: ожидание ставок в течение 10 секунд",
-            reply_markup=cls._build_bet_keyboard(),
+            "Запуск игры...",
         )
+
         game = cls(update.effective_chat.id, msg.message_id, context)
+        game.stage = Stage.BET
+
         context.application.bot_data.setdefault("games", {})[msg.chat.id] = game
         game.dealer["hand"] = []
         await game.update_table()
+
         game.timer = context.job_queue.run_once(
             lambda ctx: asyncio.create_task(game.end_bet()), when=BET_TIMEOUT
         )
@@ -105,8 +114,74 @@ class BlackjackGame:
                 InlineKeyboardButton(f"{x}%", callback_data=f"bj_bet_pct_{x}")
                 for x in PERCENT_BETS
             ],
+            [
+                InlineKeyboardButton("Микрозайм", callback_data="bj_bet_mz"),
+            ],
         ]
         return InlineKeyboardMarkup(buttons)
+
+    @staticmethod
+    def _build_play_keyboard() -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("Hit", callback_data="bj_act_hit"),
+                    InlineKeyboardButton("Stand", callback_data="bj_act_stand"),
+                ]
+            ]
+        )
+
+    def _build_keyboard(self) -> InlineKeyboardMarkup:
+        if self.stage == Stage.BET:
+            return self._build_bet_keyboard()
+        elif self.stage == Stage.PLAY and self.idx < len(self.order):
+            return self._build_play_keyboard()
+        return None
+
+    @safe_game_method
+    async def _build_table(self, header: str = None, footer: str = ""):
+        lines = []
+
+        lines.append("=_=_♠️ BLACKJACK ♠️_=_=\n")
+
+        if header:
+            lines.append(header + "\n")
+
+        if self.stage == Stage.PLAY and self.idx < len(self.order):
+            first = self.dealer["hand"][0]
+            val = hand_value([first])
+            lines.append(f"• Дилер [{first}]\n")
+        elif self.stage == Stage.END:
+            cards = " ".join(self.dealer["hand"])
+            val = hand_value(self.dealer["hand"])
+            lines.append(f"• Дилер [{cards}] [{val}]\n")
+
+        for uid in self.order:
+            st = self.players[uid]
+            cards = " ".join(st["hand"])
+            val = hand_value(st["hand"])
+
+            prefix = (
+                "🔸"
+                if self.stage == Stage.PLAY
+                and self.idx < len(self.order)
+                and uid == self.order[self.idx]
+                else "•"
+            )
+            if self.stage == Stage.BET:
+                lines.append(
+                    f"{prefix} {st['name']} | 💸: {st['bet']} | 🏦: {st['balance']}"
+                )
+            elif self.stage == Stage.PLAY:
+                lines.append(f"{prefix} {st['name']} [{cards}]")
+            else:
+                lines.append(f"{prefix} {st['name']} [{cards}] [{val}]\n")
+
+        if footer:
+            lines.append(footer)
+
+        keyboard = self._build_keyboard()
+        return "\n".join(lines), keyboard
 
     @safe_game_method
     async def handle_bet(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -116,8 +191,15 @@ class BlackjackGame:
         if uid not in self.players:
             with SessionLocal() as db:
                 p = get_player(db, uid, self.chat_id, query.from_user.first_name)
+                if parts[2] == "mz":
+                    if p.balance >= FREE_MONEY:
+                        return await query.answer(
+                            "У тебя еще есть деньги", show_alert=True
+                        )
+                    p.balance = FREE_MONEY
+                    db.commit()
             if p.balance <= 0:
-                return await query.answer("Нет монет", show_alert=True)
+                return await query.answer("Нет монеточек", show_alert=True)
             self.players[uid] = {
                 "name": query.from_user.first_name,
                 "hand": [],
@@ -128,13 +210,16 @@ class BlackjackGame:
         if parts[2] == "pct":
             pct = int(parts[3])
             amount = self.players[uid]["balance"] * pct // 100
+        elif parts[2] == "mz":
+            amount = FREE_MONEY
         else:
             amount = int(parts[2])
+
         if amount <= 0 or amount > self.players[uid]["balance"]:
             return await query.answer("Неверная ставка", show_alert=True)
         self.players[uid]["bet"] = amount
         await query.answer(f"Ставка {amount} принята")
-        await self.update_table()
+        await self.update_table(header=f"{query.from_user.first_name} садится за стол")
 
     @safe_game_method
     async def end_bet(self):
@@ -144,18 +229,17 @@ class BlackjackGame:
                 self.order.remove(uid)
         if not self.players:
             if self.session_results:
-                lines = ["♠ BLACKJACK: Стол закрыт, итоги:"]
+                lines = ["Стол закрыт, итоги:"]
                 for uid, net in self.session_results.items():
                     name = self.player_names.get(uid, str(uid))
                     sign = "+" if net >= 0 else ""
                     lines.append(f"• {name}: {sign}{net}")
                 text = "\n".join(lines)
             else:
-                text = "♠ BLACKJACK: Никто не поставил — игра отменена."
+                text = "Никто не поставил — игра отменена."
 
-            await self.ctx.bot.edit_message_text(
-                text, chat_id=self.chat_id, message_id=self.msg_id
-            )
+            self.stage = Stage.CLOSE
+            await self.update_table(footer=text)
             self.cleanup()
             return
 
@@ -171,7 +255,7 @@ class BlackjackGame:
     async def next_turn(self):
         if self.idx < len(self.order):
             uid = self.order[self.idx]
-            await self.update_table(header=f"🔸 Ход: {self.players[uid]['name']}")
+            await self.update_table()
             self.timer = self.ctx.job_queue.run_once(
                 lambda ctx: asyncio.create_task(self._do_action("stand")),
                 when=ACTION_TIMEOUT,
@@ -229,7 +313,7 @@ class BlackjackGame:
                     if t == 21:
                         coef = 1.5
                     win = bet * coef
-                    res = f"🏅 {name} +{win}"
+                    res = f"💹 {name} +{win}"
                     p.balance += win
                     profit += win
                 res += f" | 🏦 {p.balance}"
@@ -240,7 +324,7 @@ class BlackjackGame:
 
         footer = "\n" + "\n".join(results) + f"\n\nНовая игра через {RESTART_DELAY} сек"
         self.stage = Stage.END
-        await self.update_table(header="📊 Результаты раунда", footer=footer)
+        await self.update_table(header="Результаты раунда", footer=footer)
 
         self.ctx.job_queue.run_once(
             lambda job_ctx: asyncio.create_task(self._restart_game()),
@@ -254,60 +338,17 @@ class BlackjackGame:
         self.idx = 0
         self.stage = Stage.BET
 
-        await self.ctx.bot.edit_message_text(
-            "🔁 Ставки открыты снова",
-            chat_id=self.chat_id,
-            message_id=self.msg_id,
-            reply_markup=self._build_bet_keyboard(),
-        )
-
+        await self.update_table(header="Открыта новая раздача!")
         self.timer = self.ctx.job_queue.run_once(
             lambda job_ctx: asyncio.create_task(self.end_bet()), when=BET_TIMEOUT
         )
 
     @safe_game_method
     async def update_table(self, header: str = None, footer: str = ""):
-        lines = []
-        if header:
-            lines.append(header)
-
-        if self.stage == Stage.PLAY and self.idx < len(self.order):
-            first = self.dealer["hand"][0]
-            val = hand_value([first])
-            lines.append(f"• Дилер: {first} ({val})\n")
-        elif self.stage == Stage.END:
-            cards = " ".join(self.dealer["hand"])
-            val = hand_value(self.dealer["hand"])
-            lines.append(f"• Дилер: {cards} ({val})\n")
-
-        for uid in self.order:
-            st = self.players[uid]
-            cards = " ".join(st["hand"])
-            val = hand_value(st["hand"])
-            if self.stage == Stage.BET:
-                lines.append(
-                    f"• {st['name']} | Ставка: {st['bet']} | Баланс: {st['balance']}"
-                )
-            else:
-                lines.append(f"• {st['name']} | {cards} ({val}) | Ставка: {st['bet']}")
-
-        if footer:
-            lines.append(footer)
-        keyboard = None
-        if self.stage == Stage.BET:
-            keyboard = self._build_bet_keyboard()
-        elif self.stage == Stage.PLAY and self.idx < len(self.order):
-            keyboard = InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton("Hit", callback_data="bj_act_hit"),
-                        InlineKeyboardButton("Stand", callback_data="bj_act_stand"),
-                    ]
-                ]
-            )
+        table, keyboard = await self._build_table(header, footer)
         try:
             await self.ctx.bot.edit_message_text(
-                "\n".join(lines),
+                table,
                 chat_id=self.chat_id,
                 message_id=self.msg_id,
                 reply_markup=keyboard,
