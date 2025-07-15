@@ -6,6 +6,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
+    Defaults,
     filters,
 )
 from db import SessionLocal, get_player, get_room, load_event_chats
@@ -338,7 +339,14 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main() -> None:
-    app = ApplicationBuilder().token(TOKEN).post_init(after_init).build()
+    defaults = Defaults(read_timeout=60, write_timeout=60)
+    app = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .defaults(defaults)
+        .post_init(after_init)
+        .build()
+    )
     app.add_error_handler(error_handler)
 
     slot_filter = filters.Dice.SLOT_MACHINE & ~filters.FORWARDED

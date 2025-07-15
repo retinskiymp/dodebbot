@@ -1,27 +1,29 @@
-import asyncio
 import random
 from enum import Enum
-from functools import wraps
+from functools import wraps, partial
 from collections import defaultdict
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CallbackQueryHandler, CommandHandler
 from db import SessionLocal, get_player
 from config import BJ_RESTART, FREE_MONEY
 
+from telegram.error import BadRequest, RetryAfter
+
 
 def safe_game_method(func):
     @wraps(func)
     async def wrapper(self, *args, **kwargs):
-        try:
-            return await func(self, *args, **kwargs)
-        except Exception as e:
-            await self.ctx.bot.send_message(
-                chat_id=self.chat_id, text=f"Произошла ошибка в {func.__name__}: {e}"
-            )
-            import traceback
+        return await func(self, *args, **kwargs)
+        # try:
+        #     return await func(self, *args, **kwargs)
+        # except Exception as e:
+        #     await self.ctx.bot.send_message(
+        #         chat_id=self.chat_id, text=f"Произошла ошибка в {func.__name__}: {e}"
+        #     )
+        #     import traceback
 
-            traceback.print_exc()
-            self.cleanup()
+        #     traceback.print_exc()
+        #     self.cleanup()
 
     return wrapper
 
@@ -81,6 +83,8 @@ class BlackjackGame:
         self.idx = 0
         self.session_results: dict[int, int] = defaultdict(int)
         self.player_names: dict[int, str] = {}
+        self._last_table = None
+        self._last_keyboard = None
 
     @classmethod
     @safe_game_method
@@ -100,7 +104,10 @@ class BlackjackGame:
         await game.update_table()
 
         game.timer = context.job_queue.run_once(
-            lambda ctx: asyncio.create_task(game.end_bet()), when=BET_TIMEOUT
+            game.end_bet,
+            when=BET_TIMEOUT,
+            chat_id=game.chat_id,
+            name=f"bj_end_bet_{game.chat_id}",
         )
 
     @staticmethod
@@ -222,7 +229,7 @@ class BlackjackGame:
         await self.update_table(header=f"{query.from_user.first_name} садится за стол")
 
     @safe_game_method
-    async def end_bet(self):
+    async def end_bet(self, job_ctx=None):
         for uid in list(self.players):
             if self.players[uid]["bet"] == 0:
                 del self.players[uid]
@@ -257,8 +264,10 @@ class BlackjackGame:
             uid = self.order[self.idx]
             await self.update_table()
             self.timer = self.ctx.job_queue.run_once(
-                lambda ctx: asyncio.create_task(self._do_action("stand")),
+                partial(self._do_action, "stand"),
                 when=ACTION_TIMEOUT,
+                chat_id=self.chat_id,
+                name=f"bj_auto_stand_{self.chat_id}",
             )
         else:
             await self.finish_round()
@@ -273,13 +282,13 @@ class BlackjackGame:
         if self.timer:
             try:
                 self.timer.schedule_removal()
-            except:
-                pass
+            except Exception as e:
+                print(f"Error handle_action: {e}")
         await query.answer()
         await self._do_action(act)
 
     @safe_game_method
-    async def _do_action(self, act: str):
+    async def _do_action(self, act: str, job_ctx=None):
         uid = self.order[self.idx]
         state = self.players[uid]
         if act == "hit":
@@ -327,59 +336,75 @@ class BlackjackGame:
         await self.update_table(header="Результаты раунда", footer=footer)
 
         self.ctx.job_queue.run_once(
-            lambda job_ctx: asyncio.create_task(self._restart_game()),
+            self._restart_game,
             when=RESTART_DELAY,
+            chat_id=self.chat_id,
+            name=f"bj_restart_{self.chat_id}",
         )
 
     @safe_game_method
-    async def _restart_game(self):
+    async def _restart_game(self, job_ctx=None):
         self.players.clear()
         self.order.clear()
         self.idx = 0
         self.stage = Stage.BET
+        self._last_table = None
+        self._last_keyboard = None
 
         await self.update_table(header="Открыта новая раздача!")
+
         self.timer = self.ctx.job_queue.run_once(
-            lambda job_ctx: asyncio.create_task(self.end_bet()), when=BET_TIMEOUT
+            self.end_bet,
+            when=BET_TIMEOUT,
+            chat_id=self.chat_id,
+            name=f"bj_end_bet_{self.chat_id}",
         )
 
     @safe_game_method
     async def update_table(self, header: str = None, footer: str = ""):
         table, keyboard = await self._build_table(header, footer)
+        if table == self._last_table and keyboard == self._last_keyboard:
+            return
+        self._last_table, self._last_keyboard = table, keyboard
         try:
-            await self.ctx.bot.edit_message_text(
-                table,
-                chat_id=self.chat_id,
-                message_id=self.msg_id,
-                reply_markup=keyboard,
-            )
-        except:
-            pass
+            if keyboard:
+                await self.ctx.bot.edit_message_text(
+                    table,
+                    chat_id=self.chat_id,
+                    message_id=self.msg_id,
+                    reply_markup=keyboard,
+                )
+            else:
+                await self.ctx.bot.edit_message_text(
+                    table,
+                    chat_id=self.chat_id,
+                    message_id=self.msg_id,
+                )
+        except Exception as e:
+            print(f"Error updating table: {e}")
 
     def cleanup(self):
         if self.timer:
             try:
                 self.timer.schedule_removal()
-            except:
-                pass
+            except Exception as e:
+                print(f"Error cleanup: {e}")
         self.ctx.application.bot_data["games"].pop(self.chat_id, None)
+
+
+async def dispatch_bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    game = context.application.bot_data.get("games", {}).get(update.effective_chat.id)
+    if game:
+        await game.handle_bet(update, context)
+
+
+async def dispatch_act(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    game = context.application.bot_data.get("games", {}).get(update.effective_chat.id)
+    if game:
+        await game.handle_action(update, context)
 
 
 def register_handlers(app):
     app.add_handler(CommandHandler(["blackjack", "bj"], BlackjackGame.start))
-    app.add_handler(
-        CallbackQueryHandler(
-            lambda u, c: asyncio.create_task(
-                c.application.bot_data["games"][u.effective_chat.id].handle_bet(u, c)
-            ),
-            pattern="^bj_bet_",
-        )
-    )
-    app.add_handler(
-        CallbackQueryHandler(
-            lambda u, c: asyncio.create_task(
-                c.application.bot_data["games"][u.effective_chat.id].handle_action(u, c)
-            ),
-            pattern="^bj_act_",
-        )
-    )
+    app.add_handler(CallbackQueryHandler(dispatch_bet, pattern="^bj_bet_"))
+    app.add_handler(CallbackQueryHandler(dispatch_act, pattern="^bj_act_"))
