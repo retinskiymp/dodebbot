@@ -339,15 +339,8 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main() -> None:
-    defaults = Defaults(read_timeout=60, write_timeout=60)
-    app = (
-        ApplicationBuilder()
-        .token(TOKEN)
-        .defaults(defaults)
-        .post_init(after_init)
-        .build()
-    )
-    app.add_error_handler(error_handler)
+    app = ApplicationBuilder().token(TOKEN).post_init(after_init).build()
+    # app.add_error_handler(error_handler)
 
     slot_filter = filters.Dice.SLOT_MACHINE & ~filters.FORWARDED
     app.add_handler(MessageHandler(slot_filter, casino_spin))

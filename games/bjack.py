@@ -29,10 +29,18 @@ def safe_game_method(func):
 
 
 class Stage(Enum):
-    BET = "bet"
-    PLAY = "play"
-    END = "end"
-    CLOSE = "close"
+    Bet = "bet"
+    Play = "play"
+    End = "end"
+    Close = "close"
+
+
+class PlayerProperties(str, Enum):
+    Name = "name"
+    Hand = "hand"
+    Bet = "bet"
+    Balance = "balance"
+    Result = "res"
 
 
 BET_TIMEOUT = BJ_RESTART
@@ -74,7 +82,7 @@ class BlackjackGame:
         self.chat_id = chat_id
         self.msg_id = msg_id
         self.ctx = context
-        self.stage = Stage.BET
+        self.stage = Stage.Bet
         self.players = {}  # uid -> {'name', 'hand', 'bet', 'balance'}
         self.order = []
         self.dealer = {"hand": []}
@@ -83,8 +91,12 @@ class BlackjackGame:
         self.idx = 0
         self.session_results: dict[int, int] = defaultdict(int)
         self.player_names: dict[int, str] = {}
+
         self._last_table = None
         self._last_keyboard = None
+        self._paused = False
+        self._paused_msg = None
+        self._paused_timeout = None
 
     @classmethod
     @safe_game_method
@@ -97,7 +109,7 @@ class BlackjackGame:
         )
 
         game = cls(update.effective_chat.id, msg.message_id, context)
-        game.stage = Stage.BET
+        game.stage = Stage.Bet
 
         context.application.bot_data.setdefault("games", {})[msg.chat.id] = game
         game.dealer["hand"] = []
@@ -139,14 +151,17 @@ class BlackjackGame:
         )
 
     def _build_keyboard(self) -> InlineKeyboardMarkup:
-        if self.stage == Stage.BET:
+        if self.stage == Stage.Bet:
             return self._build_bet_keyboard()
-        elif self.stage == Stage.PLAY and self.idx < len(self.order):
+        elif self.stage == Stage.Play and self.idx < len(self.order):
             return self._build_play_keyboard()
         return None
 
     @safe_game_method
     async def _build_table(self, header: str = None, footer: str = ""):
+        print(
+            f"Building table for chat {self.chat_id}, stage: {self.stage}, paused: {self._paused}, players: {self.players}, dealer: {self.dealer}, idx: {self.idx}"
+        )
         lines = []
 
         lines.append("=_=_♠️ BLACKJACK ♠️_=_=\n")
@@ -154,35 +169,43 @@ class BlackjackGame:
         if header:
             lines.append(header + "\n")
 
-        if self.stage == Stage.PLAY and self.idx < len(self.order):
+        if self.stage == Stage.Play and self.idx < len(self.order):
             first = self.dealer["hand"][0]
             val = hand_value([first])
             lines.append(f"• Дилер [{first}]\n")
-        elif self.stage == Stage.END:
+        elif self.stage == Stage.End:
             cards = " ".join(self.dealer["hand"])
             val = hand_value(self.dealer["hand"])
             lines.append(f"• Дилер [{cards}] [{val}]\n")
 
         for uid in self.order:
             st = self.players[uid]
-            cards = " ".join(st["hand"])
-            val = hand_value(st["hand"])
+            cards = " ".join(st[PlayerProperties.Hand])
+            val = hand_value(st[PlayerProperties.Hand])
 
             prefix = (
                 "🔸"
-                if self.stage == Stage.PLAY
+                if self.stage == Stage.Play
                 and self.idx < len(self.order)
                 and uid == self.order[self.idx]
                 else "•"
             )
-            if self.stage == Stage.BET:
+            if self.stage == Stage.Bet:
                 lines.append(
-                    f"{prefix} {st['name']} | 💸: {st['bet']} | 🏦: {st['balance']}"
+                    f"{prefix} {st[PlayerProperties.Name]} | 💸: {st[PlayerProperties.Bet]} | 🏦: {st[PlayerProperties.Balance]}"
                 )
-            elif self.stage == Stage.PLAY:
-                lines.append(f"{prefix} {st['name']} [{cards}]")
+            elif self.stage == Stage.Play:
+                lines.append(f"{prefix} {st[PlayerProperties.Name]} [{cards}]")
             else:
-                lines.append(f"{prefix} {st['name']} [{cards}] [{val}]\n")
+                lines.append(
+                    f"{prefix} {st[PlayerProperties.Name]} [{cards}] [{val}]\n"
+                )
+
+        if self.stage == Stage.End:
+            lines.append("Результаты:")
+            for uid, st in self.players.items():
+                res = st[PlayerProperties.Result]
+                lines.append(f"{res}")
 
         if footer:
             lines.append(footer)
@@ -190,9 +213,64 @@ class BlackjackGame:
         keyboard = self._build_keyboard()
         return "\n".join(lines), keyboard
 
+    async def _pause_game(self, delay_seconds: int, notice: str):
+        print(f"Pausing game {self.chat_id} for {delay_seconds} seconds")
+        if self._paused:
+            return
+
+        self._paused = True
+        self._paused_msg = (
+            f"{notice}, игра скоро возобновится, подождите {delay_seconds} сек."
+        )
+        if self.timer:
+            try:
+                self.timer.schedule_removal()
+            except Exception:
+                pass
+
+        self.pause_timer = self.ctx.job_queue.run_once(
+            self._recover,
+            when=delay_seconds,
+            chat_id=self.chat_id,
+            name=f"bj_recover_{self.chat_id}",
+        )
+
+    async def _recover(self, job_ctx=None):
+        print(f"Recovering game {self.chat_id} after pause")
+        self._paused = False
+        self._paused_msg = None
+        self._paused_timeout = None
+
+        await self.update_table(header="♻️ Игра возобновлена")
+
+        if self.stage == Stage.Bet:
+            print("Resuming betting stage")
+            self.timer = self.ctx.job_queue.run_once(
+                self.end_bet,
+                when=BET_TIMEOUT,
+                chat_id=self.chat_id,
+                name=f"bj_end_bet_{self.chat_id}",
+            )
+        elif self.stage == Stage.Play:
+            print("Resuming play stage")
+            await self.next_turn()
+        elif self.stage == Stage.End:
+            print("Resuming end stage")
+            self.ctx.job_queue.run_once(
+                self._restart_game,
+                when=RESTART_DELAY,
+                chat_id=self.chat_id,
+                name=f"bj_restart_{self.chat_id}",
+            )
+
     @safe_game_method
     async def handle_bet(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
+        if self._paused:
+            return await query.answer(
+                self._paused_msg,
+                show_alert=True,
+            )
         uid = query.from_user.id
         parts = query.data.split("_")
         if uid not in self.players:
@@ -208,30 +286,36 @@ class BlackjackGame:
             if p.balance <= 0:
                 return await query.answer("Нет монеточек", show_alert=True)
             self.players[uid] = {
-                "name": query.from_user.first_name,
-                "hand": [],
-                "bet": 0,
-                "balance": p.balance,
+                PlayerProperties.Name: query.from_user.first_name,
+                PlayerProperties.Hand: [],
+                PlayerProperties.Bet: 0,
+                PlayerProperties.Balance: p.balance,
             }
             self.order.append(uid)
         if parts[2] == "pct":
             pct = int(parts[3])
-            amount = self.players[uid]["balance"] * pct // 100
+            amount = self.players[uid][PlayerProperties.Balance] * pct // 100
         elif parts[2] == "mz":
             amount = FREE_MONEY
         else:
             amount = int(parts[2])
 
-        if amount <= 0 or amount > self.players[uid]["balance"]:
+        if amount <= 0 or amount > self.players[uid][PlayerProperties.Balance]:
             return await query.answer("Неверная ставка", show_alert=True)
-        self.players[uid]["bet"] = amount
+        self.players[uid][PlayerProperties.Bet] = amount
         await query.answer(f"Ставка {amount} принята")
-        await self.update_table(header=f"{query.from_user.first_name} садится за стол")
+        await self.update_table()
 
     @safe_game_method
     async def end_bet(self, job_ctx=None):
+        print(
+            f"Ending betting for chat {self.chat_id}, stage: {self.stage}, paused: {self._paused}"
+        )
+        if self._paused:
+            return
+
         for uid in list(self.players):
-            if self.players[uid]["bet"] == 0:
+            if self.players[uid][PlayerProperties.Bet] == 0:
                 del self.players[uid]
                 self.order.remove(uid)
         if not self.players:
@@ -245,24 +329,30 @@ class BlackjackGame:
             else:
                 text = "Никто не поставил — игра отменена."
 
-            self.stage = Stage.CLOSE
+            self.stage = Stage.Close
             await self.update_table(footer=text)
             self.cleanup()
             return
 
-        self.stage = Stage.PLAY
+        self.stage = Stage.Play
         self.deck = build_deck()
         self.dealer["hand"] = [self.deck.pop(), self.deck.pop()]
         for uid in self.order:
-            self.players[uid]["hand"] = [self.deck.pop(), self.deck.pop()]
+            self.players[uid][PlayerProperties.Hand] = [
+                self.deck.pop(),
+                self.deck.pop(),
+            ]
         await self.update_table()
         await self.next_turn()
 
     @safe_game_method
     async def next_turn(self):
+        print(
+            f"Next turn for chat {self.chat_id}, idx: {self.idx}, stage: {self.stage}, paused: {self._paused}"
+        )
+        if self._paused:
+            return
         if self.idx < len(self.order):
-            uid = self.order[self.idx]
-            await self.update_table()
             self.timer = self.ctx.job_queue.run_once(
                 partial(self._do_action, "stand"),
                 when=ACTION_TIMEOUT,
@@ -274,9 +364,17 @@ class BlackjackGame:
 
     @safe_game_method
     async def handle_action(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        print(
+            f"Handling action for chat {self.chat_id}, idx: {self.idx}, stage: {self.stage}, paused: {self._paused}"
+        )
         query = update.callback_query
+        if self._paused:
+            return await query.answer(
+                self._paused_msg,
+                show_alert=True,
+            )
         uid = query.from_user.id
-        if self.stage != Stage.PLAY or uid != self.order[self.idx]:
+        if self.stage != Stage.Play or uid != self.order[self.idx]:
             return await query.answer("Не ваш ход", show_alert=True)
         act = query.data.split("_")[-1]
         if self.timer:
@@ -289,26 +387,32 @@ class BlackjackGame:
 
     @safe_game_method
     async def _do_action(self, act: str, job_ctx=None):
+        print(
+            f"Doing action '{act}' for chat {self.chat_id}, idx: {self.idx}, stage: {self.stage}, paused: {self._paused}"
+        )
         uid = self.order[self.idx]
         state = self.players[uid]
         if act == "hit":
-            state["hand"].append(self.deck.pop())
-        if act == "stand" or hand_value(state["hand"]) > 21:
+            state[PlayerProperties.Hand].append(self.deck.pop())
+        if act == "stand" or hand_value(state[PlayerProperties.Hand]) > 21:
             self.idx += 1
         await self.update_table()
         await self.next_turn()
 
     @safe_game_method
     async def finish_round(self):
+        print(
+            f"Finishing round for chat {self.chat_id}, idx: {self.idx}, stage: {self.stage}, paused: {self._paused}"
+        )
         while hand_value(self.dealer["hand"]) < 17:
             self.dealer["hand"].append(self.deck.pop())
         results = []
         dealer_val = hand_value(self.dealer["hand"])
         with SessionLocal() as db:
             for uid, st in self.players.items():
-                t = hand_value(st["hand"])
-                bet = st["bet"]
-                name = st["name"]
+                t = hand_value(st[PlayerProperties.Hand])
+                bet = st[PlayerProperties.Bet]
+                name = st[PlayerProperties.Name]
                 p = get_player(db, uid, self.chat_id, name)
                 profit = 0
                 if t > 21 or (dealer_val <= 21 and dealer_val > t) and t != 21:
@@ -328,13 +432,13 @@ class BlackjackGame:
                 res += f" | 🏦 {p.balance}"
                 self.session_results[uid] += profit
                 self.player_names[uid] = name
-                results.append(res)
+                self.players[uid][PlayerProperties.Result] = res
             db.commit()
 
-        footer = "\n" + "\n".join(results) + f"\n\nНовая игра через {RESTART_DELAY} сек"
-        self.stage = Stage.END
-        await self.update_table(header="Результаты раунда", footer=footer)
-
+        self.stage = Stage.End
+        await self.update_table()
+        if self._paused:
+            return
         self.ctx.job_queue.run_once(
             self._restart_game,
             when=RESTART_DELAY,
@@ -344,10 +448,13 @@ class BlackjackGame:
 
     @safe_game_method
     async def _restart_game(self, job_ctx=None):
+        print(
+            f"Restarting game for chat {self.chat_id}, stage: {self.stage}, paused: {self._paused}"
+        )
         self.players.clear()
         self.order.clear()
         self.idx = 0
-        self.stage = Stage.BET
+        self.stage = Stage.Bet
         self._last_table = None
         self._last_keyboard = None
 
@@ -362,6 +469,9 @@ class BlackjackGame:
 
     @safe_game_method
     async def update_table(self, header: str = None, footer: str = ""):
+        print(
+            f"Updating table for chat {self.chat_id}, stage: {self.stage}, paused: {self._paused}"
+        )
         table, keyboard = await self._build_table(header, footer)
         if table == self._last_table and keyboard == self._last_keyboard:
             return
@@ -380,8 +490,13 @@ class BlackjackGame:
                     chat_id=self.chat_id,
                     message_id=self.msg_id,
                 )
+        except RetryAfter as e:
+            await self._pause_game(
+                e.retry_after,
+                notice=(f"⚠️ Флуд кокблок"),
+            )
         except Exception as e:
-            print(f"Error updating table: {e}")
+            await self._pause_game(5, notice=(f"⚠️ Ошибка обновления"))
 
     def cleanup(self):
         if self.timer:
