@@ -1,10 +1,11 @@
+import math
 import random
 from enum import Enum
 from functools import wraps, partial
 from collections import defaultdict
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CallbackQueryHandler, CommandHandler
-from db import SessionLocal, get_player
+from db import SessionLocal, get_player, set_balance, change_balance
 from config import BJ_RESTART, FREE_MONEY
 
 from telegram.error import BadRequest, RetryAfter
@@ -271,38 +272,42 @@ class BlackjackGame:
                 self._paused_msg,
                 show_alert=True,
             )
-        uid = query.from_user.id
-        parts = query.data.split("_")
-        if uid not in self.players:
-            with SessionLocal() as db:
-                p = get_player(db, uid, self.chat_id, query.from_user.first_name)
-                if parts[2] == "mz":
-                    if p.balance >= FREE_MONEY:
-                        return await query.answer(
-                            "У тебя еще есть деньги", show_alert=True
-                        )
-                    p.balance = FREE_MONEY
-                    db.commit()
-            if p.balance <= 0:
-                return await query.answer("Нет монеточек", show_alert=True)
-            self.players[uid] = {
-                PlayerProperties.Name: query.from_user.first_name,
-                PlayerProperties.Hand: [],
-                PlayerProperties.Bet: 0,
-                PlayerProperties.Balance: p.balance,
-            }
-            self.order.append(uid)
-        if parts[2] == "pct":
-            pct = int(parts[3])
-            amount = self.players[uid][PlayerProperties.Balance] * pct // 100
-        elif parts[2] == "mz":
-            amount = FREE_MONEY
-        else:
-            amount = int(parts[2])
 
-        if amount <= 0 or amount > self.players[uid][PlayerProperties.Balance]:
-            return await query.answer("Неверная ставка", show_alert=True)
-        self.players[uid][PlayerProperties.Bet] = amount
+        uid = query.from_user.id
+        tmp_bet = self.players.get(uid, {}).get(PlayerProperties.Bet, 0)
+        parts = query.data.split("_")
+        with SessionLocal() as db:
+            p = get_player(db, uid, self.chat_id, query.from_user.first_name)
+            total_balance = p.balance + tmp_bet
+            if parts[2] == "mz":
+                if total_balance >= FREE_MONEY:
+                    return await query.answer("У тебя еще есть деньги", show_alert=True)
+                amount = FREE_MONEY
+                total_balance = FREE_MONEY
+            elif total_balance <= 0:
+                return await query.answer("Нет монеточек", show_alert=True)
+            elif parts[2] == "pct":
+                pct = int(parts[3])
+                amount = total_balance * pct // 100
+            else:
+                amount = int(parts[2])
+
+            if amount <= 0 or amount > total_balance:
+                return await query.answer("Неверная ставка", show_alert=True)
+            if amount == tmp_bet:
+                return await query.answer("Такая ставка уже сделана", show_alert=False)
+            set_balance(db, uid, self.chat_id, total_balance - amount)
+            db.commit()
+
+        self.players[uid] = {
+            PlayerProperties.Name: query.from_user.first_name,
+            PlayerProperties.Hand: [],
+            PlayerProperties.Bet: amount,
+            PlayerProperties.Balance: p.balance,
+        }
+        if uid not in self.order:
+            self.order.append(uid)
+
         await query.answer(f"Ставка {amount} принята")
         await self.update_table()
 
@@ -406,32 +411,47 @@ class BlackjackGame:
         )
         while hand_value(self.dealer["hand"]) < 17:
             self.dealer["hand"].append(self.deck.pop())
-        results = []
+
         dealer_val = hand_value(self.dealer["hand"])
+        dealer_hand_count = len(self.dealer["hand"])
         with SessionLocal() as db:
             for uid, st in self.players.items():
-                t = hand_value(st[PlayerProperties.Hand])
-                bet = st[PlayerProperties.Bet]
-                name = st[PlayerProperties.Name]
-                p = get_player(db, uid, self.chat_id, name)
-                profit = 0
-                if t > 21 or (dealer_val <= 21 and dealer_val > t) and t != 21:
-                    res = f"💀 {name} -{bet}"
-                    p.balance -= bet
-                    profit = -bet
-                elif t == dealer_val:
-                    res = f"😑 {name} Ничья"
+                player_val = hand_value(st[PlayerProperties.Hand])
+                player_bet = st[PlayerProperties.Bet]
+                player_name = st[PlayerProperties.Name]
+                player_hand_count = len(st[PlayerProperties.Hand])
+                player_profit = 0
+                if (
+                    player_val > 21
+                    or (dealer_val <= 21 and dealer_val > player_val)
+                    and player_val != 21
+                ):
+                    res = f"💀 {player_name} -{player_bet}"
+                    player_profit = -player_bet
+                elif (
+                    player_val == dealer_val
+                    and dealer_hand_count > 2
+                    and player_hand_count > 2
+                ) or (
+                    player_val == 21
+                    and dealer_val == 21
+                    and dealer_hand_count == 2
+                    and player_hand_count == 2
+                ):
+                    res = f"😐 {player_name} Ничья"
+                    change_balance(db, uid, self.chat_id, player_bet)
                 else:
                     coef = 1
-                    if t == 21:
+                    if player_val == 21:
                         coef = 1.5
-                    win = bet * coef
-                    res = f"💹 {name} +{win}"
-                    p.balance += win
-                    profit += win
+                    win = math.ceil(player_bet * coef)
+                    res = f"💹 {player_name} +{win}"
+                    player_profit += win
+                    change_balance(db, uid, self.chat_id, win + player_bet)
+                p = get_player(db, uid, self.chat_id, player_name)
                 res += f" | 🏦 {p.balance}"
-                self.session_results[uid] += profit
-                self.player_names[uid] = name
+                self.session_results[uid] += player_profit
+                self.player_names[uid] = player_name
                 self.players[uid][PlayerProperties.Result] = res
             db.commit()
 

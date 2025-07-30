@@ -12,6 +12,24 @@ SessionLocal = scoped_session(sessionmaker(bind=engine, expire_on_commit=False))
 Base.metadata.create_all(bind=engine)
 
 
+def change_balance(session, user_id, chat_id, amount):
+    player = (
+        session.query(PlayerModel).filter_by(tg_id=user_id, room_id=chat_id).first()
+    )
+    if not player:
+        raise ValueError(f"Player with tg id {user_id} does not exist")
+    player.balance += amount
+
+
+def set_balance(session, user_id, chat_id, amount):
+    player = (
+        session.query(PlayerModel).filter_by(tg_id=user_id, room_id=chat_id).first()
+    )
+    if not player:
+        raise ValueError(f"Player with tg id {user_id} does not exist")
+    player.balance = amount
+
+
 def get_player(session, user_id, chat_id, first_name):
     player = (
         session.query(PlayerModel).filter_by(tg_id=user_id, room_id=chat_id).first()

@@ -268,24 +268,6 @@ async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #     await _reply_clean(update, context, "\n".join(lines))
 
 
-async def microzaim_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    chat_id = update.effective_chat.id
-    with SessionLocal() as session:
-        money = FREE_MONEY
-        player = get_player(session, user.id, chat_id, user.first_name)
-        if player.balance > SPIN_COST:
-            await _reply_clean(
-                update, context, "💰 У тебя еще есть деньги, друг, одумайся"
-            )
-            return
-        player.balance = money
-        session.commit()
-    await _reply_clean(
-        update, context, f"✅ {user.first_name}, тебе выдан микрозайм на {money} монет!"
-    )
-
-
 async def register_chat_for_events_cmd(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ):
@@ -311,7 +293,6 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "\n"
         "👤  /status /st - ваш баланс, место\n"
         "🏆  /top /t - топ-10 игроков по балансу\n"
-        "💳  /microzaim /mz - взять микрозайм (если нет денег)\n"
         "\n"
         "✊  /rps - начать игру Камень–Ножницы–Бумага с ставкой\n"
         "🃏  /blackjack /bj - начать игру в блэкджек\n"
@@ -348,7 +329,6 @@ def main() -> None:
     app.add_handler(CommandHandler(["status", "st"], status_cmd))
     app.add_handler(CommandHandler(["top", "t"], top_cmd))
     app.add_handler(CommandHandler(["help", "h"], help_cmd))
-    app.add_handler(CommandHandler(["microzaim", "mz"], microzaim_cmd))
 
     app.add_handler(
         CommandHandler(
