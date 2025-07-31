@@ -141,21 +141,35 @@ class BlackjackGame:
         return InlineKeyboardMarkup(buttons)
 
     @staticmethod
-    def _build_play_keyboard() -> InlineKeyboardMarkup:
-        return InlineKeyboardMarkup(
+    def _build_play_keyboard(self) -> InlineKeyboardMarkup:
+        rows = [
             [
-                [
-                    InlineKeyboardButton("Hit", callback_data="bj_act_hit"),
-                    InlineKeyboardButton("Stand", callback_data="bj_act_stand"),
-                ]
+                InlineKeyboardButton("🕹️ Hit", callback_data="bj_act_hit"),
+                InlineKeyboardButton("🚗💨 Stand", callback_data="bj_act_stand"),
             ]
-        )
+        ]
+
+        uid = self.order[self.idx]
+        player = self.players.get(uid)
+        if player:
+            with SessionLocal() as db:
+                p = get_player(db, uid, self.chat_id, player[PlayerProperties.Name])
+                if p.balance >= player[PlayerProperties.Bet]:
+                    rows.append(
+                        [
+                            InlineKeyboardButton(
+                                "🚀 Double", callback_data="bj_act_double"
+                            )
+                        ]
+                    )
+
+        return InlineKeyboardMarkup(rows)
 
     def _build_keyboard(self) -> InlineKeyboardMarkup:
         if self.stage == Stage.Bet:
             return self._build_bet_keyboard()
         elif self.stage == Stage.Play and self.idx < len(self.order):
-            return self._build_play_keyboard()
+            return self._build_play_keyboard(self)
         return None
 
     @safe_game_method
@@ -387,11 +401,10 @@ class BlackjackGame:
                 self.timer.schedule_removal()
             except Exception as e:
                 print(f"Error handle_action: {e}")
-        await query.answer()
-        await self._do_action(act)
+        await self._do_action(act, query)
 
     @safe_game_method
-    async def _do_action(self, act: str, job_ctx=None):
+    async def _do_action(self, act: str, query, job_ctx=None):
         print(
             f"Doing action '{act}' for chat {self.chat_id}, idx: {self.idx}, stage: {self.stage}, paused: {self._paused}"
         )
@@ -401,6 +414,21 @@ class BlackjackGame:
             state[PlayerProperties.Hand].append(self.deck.pop())
         if act == "stand" or hand_value(state[PlayerProperties.Hand]) > 21:
             self.idx += 1
+        if act == "double":
+            with SessionLocal() as db:
+                p = get_player(db, uid, self.chat_id, state[PlayerProperties.Name])
+                if p.balance < state[PlayerProperties.Bet]:
+                    return await query.answer(
+                        "Недостаточно средств для удвоения ставки", show_alert=True
+                    )
+                set_balance(
+                    db, uid, self.chat_id, p.balance - state[PlayerProperties.Bet]
+                )
+                state[PlayerProperties.Bet] *= 2
+                db.commit()
+            state[PlayerProperties.Hand].append(self.deck.pop())
+            self.idx += 1
+        await query.answer()
         await self.update_table()
         await self.next_turn()
 
