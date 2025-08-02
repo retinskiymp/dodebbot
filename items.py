@@ -153,3 +153,10 @@ def get_shop_item(item_id: str) -> Item | None:
     for item in SHOP_ITEMS.values():
         if item.id == item_id or item.id_short_name == item_id:
             return item
+
+
+def player_has_item(player: "PlayerModel", item_id: str) -> bool:
+    item = get_item(item_id)
+    if not item:
+        return False
+    return Item._player_has_item(player, item)

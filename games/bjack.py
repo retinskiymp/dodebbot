@@ -8,7 +8,14 @@ from typing import List, Dict
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CallbackQueryHandler, CommandHandler
-from db import SessionLocal, get_player, get_player_by_id, set_balance, change_balance
+from items import ItemId, player_has_item
+from db import (
+    SessionLocal,
+    get_player,
+    get_player_by_id,
+    set_balance,
+    change_balance,
+)
 from config import BJ_RESTART, FREE_MONEY
 
 from telegram.error import BadRequest, RetryAfter
@@ -243,30 +250,34 @@ class BlackjackGame:
         if self.stage == Stage.Play and not active_player is None:
             first = self.dealer.hand[0]
             val = hand_value([first])
-            lines.append(f"😎 Дилер [{first}]\n")
+            lines.append(f"Дилер: {first}\n")
         elif self.stage == Stage.End:
             cards = " ".join(self.dealer.hand)
             val = hand_value(self.dealer.hand)
-            lines.append(f"😎 Дилер [{cards}] [{val}]\n")
+            lines.append(f"Дилер: {cards} [{val}]\n")
 
         for player in self.players:
             cards = " ".join(player.hand)
             val = hand_value(player.hand)
+            has_calculator = False
+            with SessionLocal() as db:
+                p = get_player_by_id(db, player.uid, self.chat_id)
+                has_calculator = player_has_item(p, ItemId.Calculator)
 
             prefix = (
-                "🔸 " if self.stage == Stage.Play and player == active_player else ""
+                "🔸" if self.stage == Stage.Play and player == active_player else "•"
             )
             if self.stage == Stage.Bet:
                 lines.append(
                     f"{prefix}{player.name} | 💸: {player.bet} | 🏦: {player.balance}"
                 )
-            elif self.stage == Stage.Play:
-                lines.append(f"{prefix} {player.name} [{cards}]")
+            elif self.stage == Stage.Play and not has_calculator:
+                lines.append(f"{prefix} {player.name}: {cards}")
             else:
-                lines.append(f"{prefix} {player.name} [{cards}] [{val}]\n")
+                lines.append(f"{prefix} {player.name}: {cards} [{val}]")
 
         if self.stage == Stage.End:
-            lines.append("Результаты:")
+            lines.append("\nРезультаты:")
             for player in self.players:
                 res = player.result
                 lines.append(f"{res}")
@@ -383,10 +394,10 @@ class BlackjackGame:
             bet=amount,
             balance=p.balance,
         )
-        for i, pl in enumerate(self.players):
-            if pl.uid == uid:
-                self.players[i] = new_player
-            break
+        if player:
+            for i, pl in enumerate(self.players):
+                if pl.uid == uid:
+                    self.players[i] = new_player
         else:
             self.players.append(new_player)
 
@@ -411,7 +422,7 @@ class BlackjackGame:
                         sign = "+" if result.profit >= 0 else ""
                         sign_b = "+" if p.balance - result.start_balance >= 0 else ""
                         lines.append(
-                            f"• {name}: blackjack:{sign}{result.profit}, balance: {sign_b}{p.balance - result.start_balance}"
+                            f"• {name}: игра: {sign}{result.profit}, баланс: {sign_b}{p.balance - result.start_balance}"
                         )
                     self._close_game_msg = "\n".join(lines)
             else:
