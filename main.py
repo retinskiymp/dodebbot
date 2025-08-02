@@ -11,6 +11,8 @@ from telegram.ext import (
 )
 from db import SessionLocal, get_player, get_room, load_event_chats
 from models import PlayerModel
+
+from items import SHOP_ITEMS, get_item
 from games.rps import RPSGame
 from games.bjack import register_handlers as register_bjack_handlers
 
@@ -195,38 +197,36 @@ async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _reply_clean(update, context, "\n".join(lines))
 
 
-# async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-#     if not context.args:
-#         await _reply_clean(update, context, "Использование: /buy <id> [кол-во]")
-#         return
-#     try:
-#         item_id = int(context.args[0])
-#         qty = int(context.args[1]) if len(context.args) > 1 else 1
-#     except ValueError:
-#         await _reply_clean(update, context, "id и количество должны быть числами")
-#         return
-#     item = get_item(item_id)
-#     if not item:
-#         await _reply_clean(update, context, "Неизвестный товар")
-#         return
-#     user = update.effective_user
-#     chat_id = update.effective_chat.id
-#     with SessionLocal() as s:
-#         player = get_player(s, user.id, chat_id, user.first_name)
-#         cost = item.price * qty
-#         if player.balance < cost:
-#             await _reply_clean(update, context, "Недостаточно монет, дружок")
-#             return
-#         try:
-#             item.buy(player, qty)
-#         except ValueError as e:
-#             await _reply_clean(update, context, str(e))
-#             return
-#         player.balance -= cost
-#         s.commit()
-#     await _reply_clean(
-#         update, context, f"🛒 Куплено: {item.name} ×{qty} за {cost} монет"
-#     )
+async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await _reply_clean(update, context, "Использование: /buy <id> [кол-во]")
+        return
+    try:
+        item_name = str(context.args[0])
+        qty = int(context.args[1]) if len(context.args) > 1 else 1
+    except ValueError:
+        await _reply_clean(update, context, "Неверные аргументы")
+        return
+    item = get_item(item_name)
+    if not item:
+        await _reply_clean(update, context, "Неизвестный товар")
+        return
+    user = update.effective_user
+    chat_id = update.effective_chat.id
+    with SessionLocal() as s:
+        player = get_player(s, user.id, chat_id, user.first_name)
+        cost = item.price * qty
+        buy_result = ""
+        if player.balance < cost:
+            await _reply_clean(update, context, "Недостаточно монет, дружок")
+            return
+        try:
+            buy_result = item.buy(player, qty)
+        except ValueError as e:
+            await _reply_clean(update, context, str(e))
+            return
+        await _reply_clean(update, context, buy_result)
+        s.commit()
 
 
 # async def use_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -260,12 +260,14 @@ async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #     await _reply_clean(update, context, msg)
 
 
-# async def shop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-#     lines = ["🛍 Доступные товарчики:"]
-#     for item_id in sorted(ITEMS):
-#         it = ITEMS[item_id]
-#         lines.append(f"ID:{item_id}. {it.name} — {it.price} монет\n📜 {it.desc}")
-#     await _reply_clean(update, context, "\n".join(lines))
+async def shop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lines = ["🛍 Доступные товарчики:"]
+    for item_id in SHOP_ITEMS:
+        it = SHOP_ITEMS[item_id]
+        lines.append(
+            f"ID:{it.id_name}/{it.id_short_name} {it.name} — {it.price} монет\n📜 {it.desc}"
+        )
+    await _reply_clean(update, context, "\n".join(lines))
 
 
 async def register_chat_for_events_cmd(
@@ -293,8 +295,9 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "\n"
         "👤  /status /st - ваш баланс, место\n"
         "🏆  /top /t - топ-10 игроков по балансу\n"
+        "💰  /shop /sh - магазинчик\n"
+        "🛒  /buy /b - купить товар в магазине\n"
         "\n"
-        "✊  /rps - начать игру Камень–Ножницы–Бумага с ставкой\n"
         "🃏  /blackjack /bj - начать игру в блэкджек\n"
     )
     await update.effective_message.reply_text(help_text, parse_mode="HTML")
@@ -303,7 +306,6 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def after_init(app):
     app.bot_data["games"] = {}
     app.bot_data["chats"] = load_event_chats()
-    # app.bot_data["mgr"] = EventManager(app)
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
@@ -321,7 +323,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 def main() -> None:
     app = ApplicationBuilder().token(TOKEN).post_init(after_init).build()
-    # app.add_error_handler(error_handler)
+    app.add_error_handler(error_handler)
 
     slot_filter = filters.Dice.SLOT_MACHINE & ~filters.FORWARDED
     app.add_handler(MessageHandler(slot_filter, casino_spin))
@@ -330,24 +332,8 @@ def main() -> None:
     app.add_handler(CommandHandler(["top", "t"], top_cmd))
     app.add_handler(CommandHandler(["help", "h"], help_cmd))
 
-    app.add_handler(
-        CommandHandler(
-            [
-                "stone",
-                "paper",
-                "scissors",
-                "rps",
-                "rsp",
-                "srp",
-                "spr",
-                "psr",
-                "prs",
-                "ppc",
-            ],
-            RPSGame.start_game,
-        )
-    )
-    app.add_handler(CallbackQueryHandler(RPSGame.handle_callback, pattern=r"^rps_"))
+    app.add_handler(CommandHandler(["shop", "sh"], shop_cmd))
+    app.add_handler(CommandHandler(["buy", "b"], buy_cmd))
 
     register_bjack_handlers(app)
 

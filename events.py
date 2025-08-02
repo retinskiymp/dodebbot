@@ -2,7 +2,6 @@ import os, random
 from datetime import datetime, timedelta
 from abc import ABC, abstractmethod
 from db import SessionLocal, get_player_by_id
-from items import ItemID
 
 # Все интервалы в СЕКУНДАХ
 MIN_WAIT = int(os.getenv("EVENT_MIN_WAIT", "10"))  # 10 мин → 600 с

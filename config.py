@@ -1,7 +1,7 @@
 import os
 
 
-START_BALANCE: int = int(os.getenv("START_BALANCE", "5000"))
+START_BALANCE: int = int(os.getenv("START_BALANCE", "1000"))
 JACKPOT_START: int = int(os.getenv("JACKPOT_START", "0"))
 DB_URL: str = os.getenv("DB_URL", "sqlite:///data.db")
 TOKEN: str = os.getenv("BOT_TOKEN")
