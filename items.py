@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 from enum import IntEnum, StrEnum, unique
-from typing import TYPE_CHECKING, Dict, List
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 if TYPE_CHECKING:
     from models import PlayerModel
@@ -11,13 +11,17 @@ if TYPE_CHECKING:
 @unique
 class ItemId(StrEnum):
     Lootbox = "lootbox"
+    BlackJackLootbox = "bjlootbox"
     Calculator = "calculator"
+    Insurance = "insurance"
 
 
 @unique
 class ItemIdShortName(StrEnum):
     Lootbox = "lb"
+    BlackJackLootbox = "bjlb"
     Calculator = "calc"
+    Insurance = "ins"
 
 
 def _inv(player: "PlayerModel") -> Dict[str, int]:
@@ -56,6 +60,10 @@ class Item:
         return f"Невозможно использовать {item.name} ({item.id})"
 
     @staticmethod
+    def _impossible_to_buy(item: Item) -> str:
+        return f"Невозможно купить {item.name} ({item.id})"
+
+    @staticmethod
     def _change_amount(player: "PlayerModel", item_id_name: ItemId, delta: int) -> None:
         inv = _inv(player)
         key = str(item_id_name)
@@ -76,8 +84,8 @@ class Item:
 
 
 class LootBox(Item):
-    id = "lootbox"
-    id_short_name = "lb"
+    id = ItemId.Lootbox
+    id_short_name = ItemIdShortName.Lootbox
     name = "🎁 Лутбокс монет"
     desc = "Открой его и получи случайное количество монет"
     price = 100
@@ -116,8 +124,8 @@ class LootBox(Item):
 
 
 class Calculator(Item):
-    id = "calculator"
-    id_short_name = "calc"
+    id = ItemId.Calculator
+    id_short_name = ItemIdShortName.Calculator
     name = "📱 Калькулятор"
     desc = "Автоматически cчитает карты на твоей руке за столом в blackjack, возможно иметь только один калькулятор"
     price = 500
@@ -132,13 +140,80 @@ class Calculator(Item):
         self._impossible_to_use(self)
 
 
+class Insurance(Item):
+    id = ItemId.Insurance
+    id_short_name = ItemIdShortName.Insurance
+    name = "🛡 Талончик-страховка"
+    desc = "Позволяет застраховать свою ставку в blackjack, если у дилера туз первой картой"
+    price = 50
+
+    def buy(self, player: "PlayerModel", qty: int = 1) -> str:
+        self._impossible_to_buy(self)
+
+    def use(self, player: "PlayerModel", qty: int = 1) -> str:
+        self._impossible_to_use(self)
+
+
+class BlackJackLootBox(Item):
+    id = ItemId.BlackJackLootbox
+    id_short_name = ItemIdShortName.BlackJackLootbox
+    name = "♠️ Blackjack лутбокс"
+    desc = "Открой его и получи случайный предмет для blackjack"
+    price = 300
+
+    # chance, min, max
+    LOOT_TABLE: dict[Optional[str], tuple[int, int, int]] = {
+        None: (50, 0, 0),
+        ItemId.Insurance: (50, 1, 2),
+    }
+
+    def buy(self, player: "PlayerModel", qty: int = 1) -> str:
+        self._assert_positive(qty)
+        self._purchase(player, self, qty)
+
+        choices: list[Optional[str]] = list(self.LOOT_TABLE.keys())
+        weights = [cfg[0] for cfg in self.LOOT_TABLE.values()]
+
+        awarded: dict[str, int] = {}
+
+        for _ in range(qty):
+            picked: Optional[str] = random.choices(choices, weights=weights, k=1)[0]
+            weight, mn, mx = self.LOOT_TABLE[picked]
+            if picked is None:
+                continue
+
+            count = random.randint(mn, mx)
+            Item._change_amount(player, picked, count)
+            awarded[picked] = awarded.get(picked, 0) + count
+
+        if not awarded:
+            return "😢 В этот раз ничего не выпало."
+
+        lines = []
+        for item_id, cnt in awarded.items():
+            item = get_item(item_id)
+            name = item.name if item else item_id
+            lines.append(f"{name} × {cnt}")
+
+        return (
+            f"🎲 Открыто {qty} Blackjack-лутбоксов\n"
+            "🎁 В них выпало:\n" + "\n".join(f"— {line}" for line in lines)
+        )
+
+    def use(self, player: "PlayerModel", qty: int = 1) -> str:
+        self._impossible_to_use(self)
+
+
 ITEMS: Dict[str, Item] = {
     ItemId.Lootbox: LootBox(),
+    ItemId.BlackJackLootbox: BlackJackLootBox(),
     ItemId.Calculator: Calculator(),
+    ItemId.Insurance: Insurance(),
 }
 
 SHOP_ITEMS: Dict[str, Item] = {
     ItemId.Lootbox: LootBox(),
+    ItemId.BlackJackLootbox: BlackJackLootBox(),
     ItemId.Calculator: Calculator(),
 }
 
@@ -160,3 +235,10 @@ def player_has_item(player: "PlayerModel", item_id: str) -> bool:
     if not item:
         return False
     return Item._player_has_item(player, item)
+
+
+def change_item_amount(player: "PlayerModel", item_id: str, delta: int) -> None:
+    item = get_item(item_id)
+    if not item:
+        raise ValueError(f"Предмет с id {item_id} не найден")
+    Item._change_amount(player, item.id, delta)

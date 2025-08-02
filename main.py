@@ -277,9 +277,10 @@ async def shop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for item_id in SHOP_ITEMS:
         it = SHOP_ITEMS[item_id]
         lines.append(
-            f"ID:{it.id}/{it.id_short_name} {it.name} — {it.price} монет\n📜 {it.desc}"
+            f"{it.name} — {it.price} монет\n🔑 <{it.id}> <{it.id_short_name}>\n📄: {it.desc}"
         )
-    await _reply_clean(update, context, "\n".join(lines))
+
+    await _reply_clean(update, context, "\n\n".join(lines))
 
 
 async def register_chat_for_events_cmd(
@@ -317,7 +318,6 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def after_init(app):
     app.bot_data["games"] = {}
-    app.bot_data["chats"] = load_event_chats()
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):

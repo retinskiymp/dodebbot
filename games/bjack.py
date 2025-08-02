@@ -8,13 +8,14 @@ from typing import List, Dict
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CallbackQueryHandler, CommandHandler
-from items import ItemId, player_has_item
+from items import ItemId, player_has_item, change_item_amount
 from db import (
     SessionLocal,
     get_player,
     get_player_by_id,
     set_balance,
     change_balance,
+    change_balance_f,
 )
 from config import BJ_RESTART, FREE_MONEY
 
@@ -28,7 +29,8 @@ def safe_game_method(func):
             return await func(self, *args, **kwargs)
         except Exception as e:
             await self.ctx.bot.send_message(
-                chat_id=self.chat_id, text=f"Произошла ошибка в {func.__name__}: {e}"
+                chat_id=self.chat_id,
+                text=f"⚠️ Произошла ошибка в {func.__name__}: {e}, игра будет остановлена, ставки возвращены, но это не точно.",
             )
             import traceback
 
@@ -37,10 +39,10 @@ def safe_game_method(func):
             with SessionLocal() as db:
                 for player in self.players:
                     change_balance(db, player.uid, self.chat_id, player.bet)
-            db.commit()
+                db.commit()
+
             self.cleanup()
             self._paused_msg = "⚠️ Кирдык"
-            raise
 
     return wrapper
 
@@ -96,6 +98,12 @@ def can_split(hand: list[str]) -> bool:
     return rank1 == rank2
 
 
+def first_card_is_ace(hand: list[str]) -> bool:
+    if len(hand) < 1:
+        return False
+    return hand[0][:-1] == "A"
+
+
 @dataclass
 class Player:
     uid: int
@@ -104,6 +112,8 @@ class Player:
     bet: int = 0
     balance: int = 0
     splitted: bool = False
+    insurance: bool = False
+    insurance_bet: int = 0
     result: str = ""
 
 
@@ -182,7 +192,6 @@ class BlackjackGame:
         ]
         return InlineKeyboardMarkup(buttons)
 
-    @staticmethod
     def _build_play_keyboard(self) -> InlineKeyboardMarkup:
         rows = [
             [
@@ -193,31 +202,42 @@ class BlackjackGame:
 
         active_player = self._active_player()
         hand = active_player.hand
-        if active_player:
-            with SessionLocal() as db:
-                p = get_player_by_id(db, active_player.uid, self.chat_id)
-                if p.balance >= active_player.bet and len(hand) == 2:
-                    rows.append(
-                        [
-                            InlineKeyboardButton(
-                                "🚀 Double", callback_data="bj_act_double"
-                            )
-                        ]
+        with SessionLocal() as db:
+            p = get_player_by_id(db, active_player.uid, self.chat_id)
+            if p.balance >= active_player.bet and len(hand) == 2:
+                rows.append(
+                    [InlineKeyboardButton("🚀 Double", callback_data="bj_act_double")]
+                )
+                if can_split(hand):
+                    splits_done = sum(
+                        1
+                        for pl in self.players
+                        if pl.uid == active_player.uid and pl.splitted
                     )
-                    if can_split(hand):
-                        splits_done = sum(
-                            1
-                            for pl in self.players
-                            if pl.uid == active_player.uid and pl.splitted
+                    if splits_done < 3:
+                        rows.append(
+                            [
+                                InlineKeyboardButton(
+                                    "✂️ Split", callback_data="bj_act_split"
+                                )
+                            ]
                         )
-                        if splits_done < 3:
-                            rows.append(
-                                [
-                                    InlineKeyboardButton(
-                                        "✂️ Split", callback_data="bj_act_split"
-                                    )
-                                ]
-                            )
+            insurance_bet = math.ceil(active_player.bet / 2)
+            if (
+                p.balance >= insurance_bet
+                and len(hand) == 2
+                and first_card_is_ace(self.dealer.hand)
+                and player_has_item(p, ItemId.Insurance)
+                and not active_player.insurance
+            ):
+                rows.append(
+                    [
+                        InlineKeyboardButton(
+                            "🛡 Insurance",
+                            callback_data=f"bj_act_insurance",
+                        )
+                    ]
+                )
 
         return InlineKeyboardMarkup(rows)
 
@@ -231,7 +251,7 @@ class BlackjackGame:
         if self.stage == Stage.Bet:
             return self._build_bet_keyboard()
         elif self.stage == Stage.Play and not self._active_player() is None:
-            return self._build_play_keyboard(self)
+            return self._build_play_keyboard()
         return None
 
     @safe_game_method
@@ -264,9 +284,14 @@ class BlackjackGame:
                 p = get_player_by_id(db, player.uid, self.chat_id)
                 has_calculator = player_has_item(p, ItemId.Calculator)
 
-            prefix = (
+            prefix = ""
+            if active_player and active_player.insurance:
+                prefix = "🛡"
+            active_mark = (
                 "🔸" if self.stage == Stage.Play and player == active_player else "•"
             )
+            prefix += f"{active_mark}"
+
             if self.stage == Stage.Bet:
                 lines.append(
                     f"{prefix}{player.name} | 💸: {player.bet} | 🏦: {player.balance}"
@@ -510,12 +535,7 @@ class BlackjackGame:
                         return await query.answer(
                             "Недостаточно средств для удвоения ставки", show_alert=True
                         )
-                set_balance(
-                    db,
-                    active_player.uid,
-                    self.chat_id,
-                    p.balance - active_player.bet,
-                )
+                change_balance_f(p, -active_player.bet)
                 active_player.bet *= 2
                 db.commit()
             active_player.hand.append(self.deck.pop())
@@ -533,12 +553,7 @@ class BlackjackGame:
                         return await query.answer(
                             "Недостаточно средств для сплита", show_alert=True
                         )
-                set_balance(
-                    db,
-                    active_player.uid,
-                    self.chat_id,
-                    p.balance - active_player.bet,
-                )
+                change_balance_f(p, -active_player.bet)
                 db.commit()
             new_hand = [active_player.hand.pop(), self.deck.pop()]
             self.players.append(
@@ -552,6 +567,30 @@ class BlackjackGame:
                 )
             )
             active_player.hand.append(self.deck.pop())
+        if act == "insurance":
+            if active_player.insurance:
+                if query:
+                    return await query.answer(
+                        "Страховка уже действует", show_alert=True
+                    )
+            with SessionLocal() as db:
+                p = get_player_by_id(db, active_player.uid, self.chat_id)
+                if not player_has_item(p, ItemId.Insurance):
+                    if query:
+                        return await query.answer(
+                            "У вас нет страховки", show_alert=True
+                        )
+                insurance_bet = math.ceil(active_player.bet / 2)
+                if p.balance < insurance_bet:
+                    if query:
+                        return await query.answer(
+                            "Недостаточно средств для страховки", show_alert=True
+                        )
+                active_player.insurance = True
+                active_player.insurance_bet = insurance_bet
+                change_balance_f(p, -insurance_bet)
+                change_item_amount(p, ItemId.Insurance, -1)
+                db.commit()
 
         if query:
             await query.answer()
@@ -570,46 +609,56 @@ class BlackjackGame:
         dealer_nbj = dealer_val == 21 and len(self.dealer.hand) == 2
         with SessionLocal() as db:
             for player in self.players:
+                p = get_player_by_id(db, player.uid, self.chat_id)
                 player_val = hand_value(player.hand)
                 player_bet = player.bet
-                player_name = player.name
                 player_nbj = player_val == 21 and len(player.hand) == 2
                 player_profit = 0
                 res_str = ""
 
                 if player_val > 21:
                     res_str = f"💀 {player.name} -{player_bet}"
-                    player_profit = -player_bet
+                    player_profit -= player_bet
 
                 elif dealer_nbj and not player_nbj:
                     res_str = f"💀 {player.name} -{player_bet}"
-                    player_profit = -player_bet
+                    player_profit -= player_bet
 
                 elif player_nbj and not dealer_nbj:
                     win = math.ceil(player_bet * 1.5)  # 3:2
-                    res_str = f"💹 {player.name} +{win}"
+                    res_str = f"💹 {player.name} +{player_bet + win}"
                     player_profit += win
-                    change_balance(db, player.uid, self.chat_id, player_bet + win)
+                    change_balance_f(p, player_bet + win)
 
                 elif dealer_val > 21:
                     win = player_bet
-                    res_str = f"💹 {player.name} +{win}"
+                    res_str = f"💹 {player.name} +{player_bet + win}"
                     player_profit += win
-                    change_balance(db, player.uid, self.chat_id, player_bet + win)
+                    change_balance_f(p, player_bet + win)
 
                 elif player_val > dealer_val:
                     win = player_bet
-                    res_str = f"💹 {player.name} +{win}"
+                    res_str = f"💹 {player.name} +{player_bet + win}"
                     player_profit += win
-                    change_balance(db, player.uid, self.chat_id, player_bet + win)
+                    change_balance_f(p, player_bet + win)
 
                 elif player_val < dealer_val:
                     res_str = f"💀 {player.name} -{player_bet}"
                     player_profit = -player_bet
 
                 else:
-                    res_str = f"😐 {player.name} Ничья"
-                    change_balance(db, player.uid, self.chat_id, player_bet)
+                    res_str = f"😐 {player.name} Ничья +{player_bet}"
+                    change_balance_f(p, player_bet)
+
+                if player.insurance:
+                    if dealer_nbj:
+                        insurance_win = player.insurance_bet * 2
+                        player_profit += player.insurance_bet
+                        change_balance_f(p, insurance_win)
+                        res_str += f" 🛡+{insurance_win}"
+                    else:
+                        player_profit -= player.insurance_bet
+                        res_str += f" 🛡-{player.insurance_bet}"
 
                 player.result = res_str
                 self.session_results[player.uid].profit += player_profit

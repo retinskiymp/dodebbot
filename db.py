@@ -12,6 +12,10 @@ SessionLocal = scoped_session(sessionmaker(bind=engine, expire_on_commit=False))
 Base.metadata.create_all(bind=engine)
 
 
+def change_balance_f(player: "PlayerModel", amount) -> None:
+    player.balance += amount
+
+
 def change_balance(session, user_id, chat_id, amount):
     player = (
         session.query(PlayerModel).filter_by(tg_id=user_id, room_id=chat_id).first()
