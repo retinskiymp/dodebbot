@@ -107,8 +107,10 @@ class Dealer:
 
 @dataclass
 class SessionResults:
+    uid: int = 0
     name: str = ""
     profit: int = 0
+    start_balance: int = 0
 
 
 class BlackjackGame:
@@ -127,6 +129,7 @@ class BlackjackGame:
 
         self._last_table = None
         self._last_keyboard = None
+        self._close_game_msg = None
         self._paused = False
         self._paused_msg = None
         self._paused_timeout = None
@@ -182,10 +185,11 @@ class BlackjackGame:
         ]
 
         active_player = self._active_player()
+        hand = active_player.hand
         if active_player:
             with SessionLocal() as db:
                 p = get_player_by_id(db, active_player.uid, self.chat_id)
-                if p.balance >= active_player.bet:
+                if p.balance >= active_player.bet and len(hand) == 2:
                     rows.append(
                         [
                             InlineKeyboardButton(
@@ -193,7 +197,6 @@ class BlackjackGame:
                             )
                         ]
                     )
-                    hand = active_player.hand
                     if can_split(hand):
                         splits_done = sum(
                             1
@@ -267,6 +270,12 @@ class BlackjackGame:
             for player in self.players:
                 res = player.result
                 lines.append(f"{res}")
+
+        if self.stage == Stage.Close:
+            if self._close_game_msg:
+                lines.append(self._close_game_msg)
+            else:
+                lines.append("Стол закрыт, игра окончена.")
 
         if footer:
             lines.append(footer)
@@ -357,6 +366,14 @@ class BlackjackGame:
                 return await query.answer("Неверная ставка", show_alert=True)
             if amount == tmp_bet:
                 return await query.answer("Такая ставка уже сделана", show_alert=False)
+
+            if uid not in self.session_results:
+                self.session_results[uid] = SessionResults(
+                    uid=uid,
+                    name=query.from_user.first_name,
+                    profit=0,
+                    start_balance=p.balance,
+                )
             set_balance(db, uid, self.chat_id, total_balance - amount)
             db.commit()
 
@@ -372,9 +389,6 @@ class BlackjackGame:
             break
         else:
             self.players.append(new_player)
-        self.session_results[uid] = SessionResults(
-            name=query.from_user.first_name, profit=0
-        )
 
         await query.answer(f"Ставка {amount} принята")
         await self.update_table()
@@ -389,17 +403,24 @@ class BlackjackGame:
 
         if not self.players:
             if self.session_results:
-                lines = ["Стол закрыт, итоги:"]
-                for uid, result in self.session_results.items():
-                    name = result.name
-                    sign = "+" if result.profit >= 0 else ""
-                    lines.append(f"• {name}: {sign}{result.profit}")
-                text = "\n".join(lines)
+                with SessionLocal() as db:
+                    lines = ["Стол закрыт, итоги:"]
+                    for uid, result in self.session_results.items():
+                        p = get_player_by_id(db, uid, self.chat_id)
+                        name = result.name
+                        sign = "+" if result.profit >= 0 else ""
+                        sign_b = "+" if p.balance - result.start_balance >= 0 else ""
+                        lines.append(
+                            f"• {name}: blackjack:{sign}{result.profit}, balance: {sign_b}{p.balance - result.start_balance}"
+                        )
+                    self._close_game_msg = "\n".join(lines)
             else:
-                text = "Никто не поставил — игра отменена."
+                self._close_game_msg = "Никто не поставил — игра отменена."
 
             self.stage = Stage.Close
-            await self.update_table(footer=text)
+            await self.update_table()
+            if self._paused:
+                return
             self.cleanup()
             return
 
@@ -535,45 +556,55 @@ class BlackjackGame:
             self.dealer.hand.append(self.deck.pop())
 
         dealer_val = hand_value(self.dealer.hand)
-        dealer_hand_count = len(self.dealer.hand)
+        dealer_nbj = dealer_val == 21 and len(self.dealer.hand) == 2
         with SessionLocal() as db:
             for player in self.players:
                 player_val = hand_value(player.hand)
                 player_bet = player.bet
                 player_name = player.name
-                player_hand_count = len(player.hand)
+                player_nbj = player_val == 21 and len(player.hand) == 2
                 player_profit = 0
-                if (
-                    player_val > 21
-                    or (dealer_val <= 21 and dealer_val > player_val)
-                    and player_val != 21
-                ):
-                    res = f"💀 {player_name} -{player_bet}"
-                    player_profit = -player_bet
-                elif (
-                    player_val == dealer_val
-                    and dealer_hand_count > 2
-                    and player_hand_count > 2
-                ) or (
-                    player_val == 21
-                    and dealer_val == 21
-                    and dealer_hand_count == 2
-                    and player_hand_count == 2
-                ):
-                    res = f"😐 {player_name} Ничья"
-                    change_balance(db, player.uid, self.chat_id, player_bet)
-                else:
-                    coef = 1
-                    if player_val == 21:
-                        coef = 1.5
-                    win = math.ceil(player_bet * coef)
-                    res = f"💹 {player_name} +{win}"
-                    player_profit += win
-                    change_balance(db, player.uid, self.chat_id, win + player_bet)
-                player.result = res
-                self.session_results[player.uid].profit += player_profit
+                res_str = ""
 
+                if player_val > 21:
+                    res_str = f"💀 {player.name} -{player_bet}"
+                    player_profit = -player_bet
+
+                elif dealer_nbj and not player_nbj:
+                    res_str = f"💀 {player.name} -{player_bet}"
+                    player_profit = -player_bet
+
+                elif player_nbj and not dealer_nbj:
+                    win = math.ceil(player_bet * 1.5)  # 3:2
+                    res_str = f"💹 {player.name} +{win}"
+                    player_profit += win
+                    change_balance(db, player.uid, self.chat_id, player_bet + win)
+
+                elif dealer_val > 21:
+                    win = player_bet
+                    res_str = f"💹 {player.name} +{win}"
+                    player_profit += win
+                    change_balance(db, player.uid, self.chat_id, player_bet + win)
+
+                elif player_val > dealer_val:
+                    win = player_bet
+                    res_str = f"💹 {player.name} +{win}"
+                    player_profit += win
+                    change_balance(db, player.uid, self.chat_id, player_bet + win)
+
+                elif player_val < dealer_val:
+                    res_str = f"💀 {player.name} -{player_bet}"
+                    player_profit = -player_bet
+
+                else:
+                    res_str = f"😐 {player.name} Ничья"
+                    change_balance(db, player.uid, self.chat_id, player_bet)
+
+                player.result = res_str
+                self.session_results[player.uid].profit += player_profit
             db.commit()
+
+        print("Session results:", self.session_results)
 
         self.stage = Stage.End
         await self.update_table()
