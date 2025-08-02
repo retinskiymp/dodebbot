@@ -9,13 +9,15 @@ if TYPE_CHECKING:
 
 
 @unique
-class ItemIdName(StrEnum):
+class ItemId(StrEnum):
     Lootbox = "lootbox"
+    Calculator = "calculator"
 
 
 @unique
 class ItemIdShortName(StrEnum):
     Lootbox = "lb"
+    Calculator = "calc"
 
 
 def _inv(player: "PlayerModel") -> Dict[str, int]:
@@ -23,7 +25,7 @@ def _inv(player: "PlayerModel") -> Dict[str, int]:
 
 
 class Item:
-    id_name: str
+    id: str
     id_short_name: str
     name: str
     desc: str
@@ -40,13 +42,21 @@ class Item:
         player.balance -= total_cost
 
     @staticmethod
-    def _impossible_to_use(item: Item) -> str:
-        return f"Невозможно использовать {item.name} ({item.id_name})"
+    def _player_has_item(player: "PlayerModel", item: Item) -> bool:
+        inv = _inv(player)
+        return inv.get(str(item.id), 0) > 0
 
     @staticmethod
-    def _change_amount(
-        player: "PlayerModel", item_id_name: ItemIdName, delta: int
-    ) -> None:
+    def _possible_have_only_one(player: "PlayerModel", item: Item) -> None:
+        if Item._player_has_item(player, item):
+            raise ValueError(f"Невозможно иметь более одного {item.name} ({item.id})")
+
+    @staticmethod
+    def _impossible_to_use(item: Item) -> str:
+        return f"Невозможно использовать {item.name} ({item.id})"
+
+    @staticmethod
+    def _change_amount(player: "PlayerModel", item_id_name: ItemId, delta: int) -> None:
         inv = _inv(player)
         key = str(item_id_name)
         new_val = inv.get(key, 0) + delta
@@ -60,24 +70,16 @@ class Item:
 
     def buy(self, player: "PlayerModel", qty: int = 1) -> str:
         raise NotImplementedError
-        # self._assert_positive(qty)
-        # if not self.stackable and qty > 1:
-        #     raise ValueError("Этот предмет нельзя покупать пачкой")
-        # if not self.stackable and str(self.id) in _inv(player):
-        #     raise ValueError("У тебя уже есть такой предмет")
-        # self._change_amount(player, self.id, qty)
 
     def use(self, player: "PlayerModel", qty: int = 1) -> str:
         raise NotImplementedError
 
 
 class LootBox(Item):
-    id_name = "lootbox"
+    id = "lootbox"
     id_short_name = "lb"
-    name = "🎁 Лутбокс"
-    desc = (
-        "Открой его и получи случайное количество монет, а может быть и еще что-то...?"
-    )
+    name = "🎁 Лутбокс монет"
+    desc = "Открой его и получи случайное количество монет"
     price = 100
     stackable = True
 
@@ -113,16 +115,41 @@ class LootBox(Item):
         self._impossible_to_use(self)
 
 
+class Calculator(Item):
+    id = "calculator"
+    id_short_name = "calc"
+    name = "📱 Калькулятор"
+    desc = "Автоматически cчитает карты на твоей руке за столом в blackjack, возможно иметь только один калькулятор"
+    price = 500
+
+    def buy(self, player: "PlayerModel", qty: int = 1) -> str:
+        self._possible_have_only_one(player, self)
+        self._purchase(player, self, 1)
+        self._change_amount(player, ItemId.Calculator, 1)
+        return f"✅ Куплен {self.name}!"
+
+    def use(self, player: "PlayerModel", qty: int = 1) -> str:
+        self._impossible_to_use(self)
+
+
 ITEMS: Dict[str, Item] = {
-    ItemIdName.Lootbox: LootBox(),
+    ItemId.Lootbox: LootBox(),
+    ItemId.Calculator: Calculator(),
 }
 
 SHOP_ITEMS: Dict[str, Item] = {
-    ItemIdName.Lootbox: LootBox(),
+    ItemId.Lootbox: LootBox(),
+    ItemId.Calculator: Calculator(),
 }
 
 
 def get_item(item_id: str) -> Item | None:
     for item in ITEMS.values():
-        if item.id_name == item_id or item.id_short_name == item_id:
+        if item.id == item_id or item.id_short_name == item_id:
+            return item
+
+
+def get_shop_item(item_id: str) -> Item | None:
+    for item in SHOP_ITEMS.values():
+        if item.id == item_id or item.id_short_name == item_id:
             return item

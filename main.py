@@ -12,11 +12,11 @@ from telegram.ext import (
 from db import SessionLocal, get_player, get_room, load_event_chats
 from models import PlayerModel
 
-from items import SHOP_ITEMS, get_item
+from items import ITEMS, SHOP_ITEMS, get_shop_item, get_item
 from games.rps import RPSGame
 from games.bjack import register_handlers as register_bjack_handlers
 
-from config import FREE_MONEY, SPIN_COST, TOKEN
+from config import SPIN_COST, TOKEN
 
 MAP = [1, 2, 3, 0]
 
@@ -161,19 +161,31 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat_id = update.effective_chat.id
     with SessionLocal() as session:
-        player = get_player(session, user.id, chat_id, user.first_name)
+        p = get_player(session, user.id, chat_id, user.first_name)
         higher_count = (
             session.query(PlayerModel)
-            .filter(
-                PlayerModel.room_id == chat_id, PlayerModel.balance > player.balance
-            )
+            .filter(PlayerModel.room_id == chat_id, PlayerModel.balance > p.balance)
             .count()
         )
         rank = higher_count + 1
+        inv = p.items or {}
+        lines: list[str] = []
+        for item_id, qty in inv.items():
+            item = get_item(item_id)
+            if item:
+                lines.append(f"{item.name} × {qty}")
+
+        if lines:
+            inventory_text = "\n".join(f"  {line}" for line in lines)
+        else:
+            inventory_text = ""
+
     msg = (
-        f"👽 {player.first_name} (id:{player.id})\n"
-        f"🏦 Баланс: {player.balance:,}\n"
-        f"📊 Место в топе: {rank}\n\n"
+        f"👽 {p.first_name}\n"
+        f"🏦 Баланс: {p.balance:,}\n"
+        f"📊 Место в топе: {rank}\n"
+        f"📦 Инвентарь:\n"
+        f"{inventory_text}"
     )
     await _reply_clean(update, context, msg)
 
@@ -207,7 +219,7 @@ async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await _reply_clean(update, context, "Неверные аргументы")
         return
-    item = get_item(item_name)
+    item = get_shop_item(item_name)
     if not item:
         await _reply_clean(update, context, "Неизвестный товар")
         return
@@ -265,7 +277,7 @@ async def shop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for item_id in SHOP_ITEMS:
         it = SHOP_ITEMS[item_id]
         lines.append(
-            f"ID:{it.id_name}/{it.id_short_name} {it.name} — {it.price} монет\n📜 {it.desc}"
+            f"ID:{it.id}/{it.id_short_name} {it.name} — {it.price} монет\n📜 {it.desc}"
         )
     await _reply_clean(update, context, "\n".join(lines))
 
@@ -293,7 +305,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "\n"
         "🎰 <b>Слот-машина</b> — просто пришлите в чат.\n"
         "\n"
-        "👤  /status /st - ваш баланс, место\n"
+        "👤  /status /st - ваш баланс, место, инвентарь\n"
         "🏆  /top /t - топ-10 игроков по балансу\n"
         "💰  /shop /sh - магазинчик\n"
         "🛒  /buy /b - купить товар в магазине\n"
