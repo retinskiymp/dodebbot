@@ -94,7 +94,7 @@ class LootBox(Item):
 
     # chance, min, max
     LOOT_TABLE: dict[Optional[str], tuple[int, int, int]] = {
-        "coins": (30, 0, 150),
+        "coins": (30, 0, 200),
         ItemId.Insurance: (30, 1, 2),
         ItemId.Lootbox: (20, 1, 1),
         ItemId.HotCard: (20, 1, 2),
@@ -188,7 +188,7 @@ class Insurance(Item):
 class HotCard(Item):
     id = ItemId.HotCard
     id_short_name = ItemIdShortName.HotCard
-    name = "🔥🔮 Горячая карта"
+    name = "🌡️ Картоградусник"
     desc = "Узнай какого номинала несколько ближайших карт в колоде"
     price = 200
 

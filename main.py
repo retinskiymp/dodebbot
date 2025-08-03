@@ -128,34 +128,6 @@ async def casino_spin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["last_bot_id"] = bot_msg.message_id
 
 
-# async def join_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-#     if not _is_chat_registered_for_events(update.effective_chat.id, context):
-#         await _reply_clean(update, context, "Чат не участвует в ивентах.")
-#         return
-#     ev_id = context.args[0].lower() if context.args else None
-#     ok, msg = context.application.bot_data["mgr"].join(
-#         update.effective_chat.id,
-#         update.effective_user.id,
-#         ev_id,
-#         update.effective_user.first_name,
-#     )
-#     await _reply_clean(update, context, msg)
-
-
-# async def event_info_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-#     if not _is_chat_registered_for_events(update.effective_chat.id, context):
-#         await _reply_clean(update, context, "Чат не участвует в ивентах.")
-#         return
-#     info = context.application.bot_data["mgr"].info()
-#     await _reply_clean(update, context, info)
-
-
-# async def jackpot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-#     with SessionLocal() as session:
-#         jp = get_jackpot(session, update.effective_chat.id)
-#     await _reply_clean(update, context, f"🎯 Текущий джек-пот: {jp} очков")
-
-
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat_id = update.effective_chat.id
@@ -172,7 +144,7 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for item_id, qty in inv.items():
             item = get_item(item_id)
             if item:
-                lines.append(f"{item.name} × {qty}")
+                lines.append(f"{item.name} <{item.id_short_name}> × {qty}")
 
         if lines:
             inventory_text = "\n".join(f"  {line}" for line in lines)

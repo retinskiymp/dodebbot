@@ -8,7 +8,7 @@ from typing import List, Dict
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CallbackQueryHandler, CommandHandler
-from items import ItemId, player_has_item, change_item_amount
+from items import ITEMS, ItemId, player_has_item, change_item_amount
 from db import (
     SessionLocal,
     get_player,
@@ -195,8 +195,8 @@ class BlackjackGame:
     def _build_play_keyboard(self) -> InlineKeyboardMarkup:
         rows = [
             [
-                InlineKeyboardButton("🕹️ Hit", callback_data="bj_act_hit"),
-                InlineKeyboardButton("🚗💨 Stand", callback_data="bj_act_stand"),
+                InlineKeyboardButton("🕹️ Взять", callback_data="bj_act_hit"),
+                InlineKeyboardButton("🚗💨 Хватит", callback_data="bj_act_stand"),
             ]
         ]
 
@@ -207,7 +207,7 @@ class BlackjackGame:
             p = get_player_by_id(db, active_player.uid, self.chat_id)
             if p.balance >= active_player.bet and len(hand) == 2:
                 ds_buttons.append(
-                    InlineKeyboardButton("🚀 Double", callback_data="bj_act_double")
+                    InlineKeyboardButton("🚀 Удвоить", callback_data="bj_act_double")
                 )
                 if can_split(hand):
                     splits_done = sum(
@@ -218,7 +218,7 @@ class BlackjackGame:
                     if splits_done < 3:
                         ds_buttons.append(
                             InlineKeyboardButton(
-                                "✂️ Split", callback_data="bj_act_split"
+                                "✂️ Разделить", callback_data="bj_act_split"
                             )
                         )
             if ds_buttons:
@@ -235,7 +235,7 @@ class BlackjackGame:
                 rows.append(
                     [
                         InlineKeyboardButton(
-                            "🛡 Insurance",
+                            ITEMS[ItemId.Insurance].name,
                             callback_data=f"bj_act_insurance",
                         )
                     ]
@@ -244,7 +244,7 @@ class BlackjackGame:
                 rows.append(
                     [
                         InlineKeyboardButton(
-                            "🔥 Hot Card",
+                            ITEMS[ItemId.HotCard].name,
                             callback_data="bj_act_hotcard",
                         )
                     ]
@@ -473,7 +473,12 @@ class BlackjackGame:
 
         self.stage = Stage.Play
         self.deck = build_deck()
-        self.dealer.hand = [self.deck.pop(), self.deck.pop()]
+        self.dealer.hand = [
+            # "A♠",
+            # "10♣",
+            self.deck.pop(),
+            self.deck.pop(),
+        ]
         for player in self.players:
             player.hand = [
                 self.deck.pop(),
@@ -532,7 +537,7 @@ class BlackjackGame:
         with SessionLocal() as db:
             p = get_player_by_id(db, active_player.uid, self.chat_id)
             if not player_has_item(p, ItemId.HotCard):
-                return "У вас нет горячей карты"
+                return f"У вас нет {ITEMS[ItemId.HotCard].name}."
             change_item_amount(p, ItemId.HotCard, -1)
             db.commit()
 
@@ -704,8 +709,8 @@ class BlackjackGame:
 
                 if player.insurance:
                     if dealer_nbj:
-                        insurance_win = player.insurance_bet * 2
-                        player_profit += player.insurance_bet
+                        insurance_win = player.insurance_bet * 3  # 2:1
+                        player_profit += player.insurance_bet * 2
                         change_balance_f(p, insurance_win)
                         res_str += f" 🛡+{insurance_win}"
                     else:
