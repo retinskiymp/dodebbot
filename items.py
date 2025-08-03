@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 from enum import IntEnum, StrEnum, unique
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
+from db import change_balance_f
 
 if TYPE_CHECKING:
     from models import PlayerModel
@@ -13,6 +14,7 @@ class ItemId(StrEnum):
     Lootbox = "lootbox"
     Calculator = "calculator"
     Insurance = "insurance"
+    HotCard = "hot_card"
 
 
 @unique
@@ -20,6 +22,7 @@ class ItemIdShortName(StrEnum):
     Lootbox = "lb"
     Calculator = "calc"
     Insurance = "ins"
+    HotCard = "hc"
 
 
 def _inv(player: "PlayerModel") -> Dict[str, int]:
@@ -91,19 +94,31 @@ class LootBox(Item):
 
     # chance, min, max
     LOOT_TABLE: dict[Optional[str], tuple[int, int, int]] = {
-        None: (50, 0, 0),
-        ItemId.Insurance: (50, 1, 2),
+        "coins": (30, 0, 150),
+        ItemId.Insurance: (30, 1, 2),
+        ItemId.Lootbox: (20, 1, 1),
+        ItemId.HotCard: (20, 1, 2),
     }
 
     def open_lootbox(self, player: "PlayerModel", qty: int = 1) -> str:
-        choices: list[Optional[str]] = list(self.LOOT_TABLE.keys())
+        choices = list(self.LOOT_TABLE.keys())
         weights = [cfg[0] for cfg in self.LOOT_TABLE.values()]
 
         awarded: dict[str, int] = {}
 
         for _ in range(qty):
-            picked: Optional[str] = random.choices(choices, weights=weights, k=1)[0]
+            picked = random.choices(choices, weights=weights, k=1)[0]
             weight, mn, mx = self.LOOT_TABLE[picked]
+
+            if picked == "coins":
+                tens_min = mn // 10
+                tens_max = mx // 10
+                count = random.randint(tens_min, tens_max) * 10
+                if count > 0:
+                    change_balance_f(player, count)
+                    awarded["coins"] = awarded.get("coins", 0) + count
+                continue
+
             if picked is None:
                 continue
 
@@ -116,13 +131,16 @@ class LootBox(Item):
 
         lines = []
         for item_id, cnt in awarded.items():
-            item = get_item(item_id)
-            name = item.name if item else item_id
+            if item_id == "coins":
+                name = "🪙 Монеты"
+            else:
+                item = get_item(item_id)
+                name = item.name if item else str(item_id)
             lines.append(f"{name} × {cnt}")
 
         return (
-            f"🎲 Открыто {qty} Blackjack-лутбоксов\n"
-            "🎁 В них выпало:\n" + "\n".join(f"— {line}" for line in lines)
+            f"🎁 Открыто {qty} лутбоксов стоимостью {qty * self.price} монет\n"
+            "🏆 Содержимое:\n" + "\n".join(f"— {line}" for line in lines)
         )
 
     def buy(self, player: "PlayerModel", qty: int = 1) -> str:
@@ -167,10 +185,25 @@ class Insurance(Item):
         return self._impossible_to_use(self)
 
 
+class HotCard(Item):
+    id = ItemId.HotCard
+    id_short_name = ItemIdShortName.HotCard
+    name = "🔥🔮 Горячая карта"
+    desc = "Узнай какого номинала несколько ближайших карт в колоде"
+    price = 200
+
+    def buy(self, player: "PlayerModel", qty: int = 1) -> str:
+        return self._impossible_to_buy(self)
+
+    def use(self, player: "PlayerModel", qty: int = 1) -> str:
+        return self._impossible_to_use(self)
+
+
 ITEMS: Dict[str, Item] = {
     ItemId.Lootbox: LootBox(),
     ItemId.Calculator: Calculator(),
     ItemId.Insurance: Insurance(),
+    ItemId.HotCard: HotCard(),
 }
 
 SHOP_ITEMS: Dict[str, Item] = {

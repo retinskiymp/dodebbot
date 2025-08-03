@@ -203,10 +203,11 @@ class BlackjackGame:
         active_player = self._active_player()
         hand = active_player.hand
         with SessionLocal() as db:
+            ds_buttons = []
             p = get_player_by_id(db, active_player.uid, self.chat_id)
             if p.balance >= active_player.bet and len(hand) == 2:
-                rows.append(
-                    [InlineKeyboardButton("🚀 Double", callback_data="bj_act_double")]
+                ds_buttons.append(
+                    InlineKeyboardButton("🚀 Double", callback_data="bj_act_double")
                 )
                 if can_split(hand):
                     splits_done = sum(
@@ -215,13 +216,14 @@ class BlackjackGame:
                         if pl.uid == active_player.uid and pl.splitted
                     )
                     if splits_done < 3:
-                        rows.append(
-                            [
-                                InlineKeyboardButton(
-                                    "✂️ Split", callback_data="bj_act_split"
-                                )
-                            ]
+                        ds_buttons.append(
+                            InlineKeyboardButton(
+                                "✂️ Split", callback_data="bj_act_split"
+                            )
                         )
+            if ds_buttons:
+                rows.append(ds_buttons)
+
             insurance_bet = math.ceil(active_player.bet / 2)
             if (
                 p.balance >= insurance_bet
@@ -235,6 +237,15 @@ class BlackjackGame:
                         InlineKeyboardButton(
                             "🛡 Insurance",
                             callback_data=f"bj_act_insurance",
+                        )
+                    ]
+                )
+            if player_has_item(p, ItemId.HotCard):
+                rows.append(
+                    [
+                        InlineKeyboardButton(
+                            "🔥 Hot Card",
+                            callback_data="bj_act_hotcard",
                         )
                     ]
                 )
@@ -517,6 +528,41 @@ class BlackjackGame:
         await self._do_action(act, query)
 
     @safe_game_method
+    async def _handle_hotcard(self, active_player) -> str:
+        with SessionLocal() as db:
+            p = get_player_by_id(db, active_player.uid, self.chat_id)
+            if not player_has_item(p, ItemId.HotCard):
+                return "У вас нет горячей карты"
+            change_item_amount(p, ItemId.HotCard, -1)
+            db.commit()
+
+        lookahead = random.randint(4, 6)
+        upcoming = self.deck[-lookahead:]
+
+        high_ranks = {"10", "J", "Q", "K", "A"}
+        low_ranks = {"2", "3", "4", "5", "6", "7", "8", "9"}
+        cnt_high = sum(1 for c in upcoming if c[:-1] in high_ranks)
+        cnt_low = sum(1 for c in upcoming if c[:-1] in low_ranks)
+        total = cnt_high + cnt_low
+        if total == 0:
+            return "Недостаточно карт для анализа."
+
+        ratio = cnt_high / total
+
+        thr_high = 0.6
+        thr_low = 1 - thr_high
+
+        print("Hot card analysis:", upcoming, ratio, thr_high, thr_low)
+        if ratio >= thr_high:
+            hint = "🔥 Скорее всего впереди преимущественно старшие карты."
+        elif ratio <= thr_low:
+            hint = "❄️ Скорее всего впереди преимущественно младшие карты."
+        else:
+            hint = "⚖️ Явного перевеса в ближайших картах не заметно."
+
+        return hint
+
+    @safe_game_method
     async def _do_action(self, act: str, query, job_ctx=None):
         print(
             f"Doing action '{act}' for chat {self.chat_id}, idx: {self.active_player_index}, stage: {self.stage}, paused: {self._paused}"
@@ -591,6 +637,12 @@ class BlackjackGame:
                 change_balance_f(p, -insurance_bet)
                 change_item_amount(p, ItemId.Insurance, -1)
                 db.commit()
+
+        if act == "hotcard":
+            hint = await self._handle_hotcard(active_player)
+            if query:
+                await query.answer(hint, show_alert=True)
+            return
 
         if query:
             await query.answer()
