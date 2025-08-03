@@ -9,11 +9,10 @@ from telegram.ext import (
     Defaults,
     filters,
 )
-from db import SessionLocal, get_player, get_room, load_event_chats
+from db import SessionLocal, get_player, get_room
 from models import PlayerModel
 
-from items import ITEMS, SHOP_ITEMS, get_shop_item, get_item
-from games.rps import RPSGame
+from items import SHOP_ITEMS, get_shop_item, get_item, player_has_item
 from games.bjack import register_handlers as register_bjack_handlers
 
 from config import SPIN_COST, TOKEN
@@ -241,35 +240,34 @@ async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         s.commit()
 
 
-# async def use_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-#     if not context.args:
-#         await _reply_clean(update, context, "Использование: /use <id> [кол-во]")
-#         return
-#     try:
-#         item_id = int(context.args[0])
-#         qty = int(context.args[1]) if len(context.args) > 1 else 1
-#     except ValueError:
-#         await _reply_clean(update, context, "id и количество должны быть числами")
-#         return
-#     item = get_item(item_id)
-#     if not item:
-#         await _reply_clean(update, context, "Неизвестный предмет")
-#         return
-#     user = update.effective_user
-#     chat_id = update.effective_chat.id
-#     with SessionLocal() as s:
-#         player = get_player(s, user.id, chat_id, user.first_name)
-#         have = (player.items or {}).get(str(item.id), 0)
-#         if have < qty:
-#             await _reply_clean(update, context, "У тебя нет такого количества, друг")
-#             return
-#         try:
-#             msg = item.use(player, qty)
-#         except ValueError as e:
-#             await _reply_clean(update, context, str(e))
-#             return
-#         s.commit()
-#     await _reply_clean(update, context, msg)
+async def use_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await _reply_clean(update, context, "Использование: /use <id> [кол-во]")
+        return
+    try:
+        item_id = str(context.args[0])
+        qty = int(context.args[1]) if len(context.args) > 1 else 1
+    except ValueError:
+        await _reply_clean(update, context, "Неверные аргументы")
+        return
+    item = get_item(item_id)
+    if not item:
+        await _reply_clean(update, context, "Неизвестный предмет")
+        return
+    user = update.effective_user
+    chat_id = update.effective_chat.id
+    with SessionLocal() as s:
+        player = get_player(s, user.id, chat_id, user.first_name)
+        if not player_has_item(player, item_id, qty):
+            await _reply_clean(update, context, "Нет такого количества")
+            return
+        try:
+            msg = item.use(player, qty)
+        except ValueError as e:
+            await _reply_clean(update, context, str(e))
+            return
+        s.commit()
+    await _reply_clean(update, context, msg)
 
 
 async def shop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -310,6 +308,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🏆  /top /t - топ-10 игроков по балансу\n"
         "💰  /shop /sh - магазинчик\n"
         "🛒  /buy /b - купить товар в магазине\n"
+        "📦  /use /u - использовать предмет из инвентаря\n"
         "\n"
         "🃏  /blackjack /bj - начать игру в блэкджек\n"
     )
@@ -346,6 +345,7 @@ def main() -> None:
 
     app.add_handler(CommandHandler(["shop", "sh"], shop_cmd))
     app.add_handler(CommandHandler(["buy", "b"], buy_cmd))
+    app.add_handler(CommandHandler(["use", "u"], use_cmd))
 
     register_bjack_handlers(app)
 
