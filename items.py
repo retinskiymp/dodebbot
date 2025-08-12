@@ -89,14 +89,14 @@ class LootBox(Item):
     id_short_name = ItemIdShortName.Lootbox
     name = "🎁 Лутбокс"
     desc = "Содержит случайные предметы и монеты"
-    price = 300
+    price = 200
     stackable = True
 
     # chance, min, max
     LOOT_TABLE: dict[Optional[str], tuple[int, int, int]] = {
         "coins": (30, 0, 200),
-        ItemId.Insurance: (30, 1, 2),
-        ItemId.Lootbox: (20, 1, 1),
+        ItemId.Insurance: (30, 1, 3),
+        ItemId.Lootbox: (20, 1, 2),
         ItemId.HotCard: (20, 1, 2),
     }
 
