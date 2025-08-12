@@ -3,17 +3,27 @@ from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     MessageHandler,
-    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
-    Defaults,
     filters,
 )
 from db import SessionLocal, get_player, get_room
 from models import PlayerModel
 
 from items import SHOP_ITEMS, get_shop_item, get_item, player_has_item
+from handlers import (
+    HandlerStatus,
+    HandlerTop,
+    HandlerHelp,
+    HandlerShop,
+    HandlerBuy,
+    HandlerUse,
+    HandlerBlackJack,
+    HandlerWiki,
+)
+
 from games.bjack import register_handlers as register_bjack_handlers
+from wiki import register_handlers as register_wiki_handlers
 
 from config import SPIN_COST, TOKEN
 
@@ -270,19 +280,25 @@ async def register_chat_for_events_cmd(
     )
 
 
+def _fmt_cmds(aliases) -> str:
+    return " ".join(f"/{name}" for name in list(aliases))
+
+
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "📖 <b>Доступные команды</b>\n"
         "\n"
         "🎰 <b>Слот-машина</b> — просто пришлите в чат.\n"
         "\n"
-        "👤  /status /st - ваш баланс, место, инвентарь\n"
-        "🏆  /top /t - топ-10 игроков по балансу\n"
-        "💰  /shop /sh - магазинчик\n"
-        "🛒  /buy /b - купить товар в магазине\n"
-        "📦  /use /u - использовать предмет из инвентаря\n"
+        f"👤  {_fmt_cmds(HandlerStatus)} - ваш баланс, место, инвентарь\n"
+        f"🏆  {_fmt_cmds(HandlerTop)} - топ-10 игроков по балансу\n"
+        f"💰  {_fmt_cmds(HandlerShop)} - магазинчик\n"
+        f"🛒  {_fmt_cmds(HandlerBuy)} - купить товар в магазине\n"
+        f"📦  {_fmt_cmds(HandlerUse)} - использовать предмет из инвентаря\n"
         "\n"
-        "🃏  /blackjack /bj - начать игру в блэкджек\n"
+        f"🃏  {_fmt_cmds(HandlerBlackJack)} - начать игру в блэкджек\n"
+        "\n"
+        f"📚  {_fmt_cmds(HandlerWiki)} - справочник по терминам (/wiki (cmd or item))"
     )
     await update.effective_message.reply_text(help_text, parse_mode="HTML")
 
@@ -311,15 +327,16 @@ def main() -> None:
     slot_filter = filters.Dice.SLOT_MACHINE & ~filters.FORWARDED
     app.add_handler(MessageHandler(slot_filter, casino_spin))
 
-    app.add_handler(CommandHandler(["status", "st"], status_cmd))
-    app.add_handler(CommandHandler(["top", "t"], top_cmd))
-    app.add_handler(CommandHandler(["help", "h"], help_cmd))
+    app.add_handler(CommandHandler(list(HandlerStatus), status_cmd))
+    app.add_handler(CommandHandler(list(HandlerTop), top_cmd))
+    app.add_handler(CommandHandler(list(HandlerHelp), help_cmd))
 
-    app.add_handler(CommandHandler(["shop", "sh"], shop_cmd))
-    app.add_handler(CommandHandler(["buy", "b"], buy_cmd))
-    app.add_handler(CommandHandler(["use", "u"], use_cmd))
+    app.add_handler(CommandHandler(list(HandlerShop), shop_cmd))
+    app.add_handler(CommandHandler(list(HandlerBuy), buy_cmd))
+    app.add_handler(CommandHandler(list(HandlerUse), use_cmd))
 
     register_bjack_handlers(app)
+    register_wiki_handlers(app)
 
     app.run_polling()
 

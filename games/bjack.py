@@ -9,6 +9,7 @@ from typing import List, Dict
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CallbackQueryHandler, CommandHandler
 from items import ITEMS, ItemId, player_has_item, change_item_amount
+from handlers import HandlerBlackJack
 from db import (
     SessionLocal,
     get_player,
@@ -195,7 +196,7 @@ class BlackjackGame:
     def _build_play_keyboard(self) -> InlineKeyboardMarkup:
         rows = [
             [
-                InlineKeyboardButton("🕹️ Взять", callback_data="bj_act_hit"),
+                InlineKeyboardButton("🕹️ Взять карту", callback_data="bj_act_hit"),
                 InlineKeyboardButton("🚗💨 Хватит", callback_data="bj_act_stand"),
             ]
         ]
@@ -281,11 +282,11 @@ class BlackjackGame:
         if self.stage == Stage.Play and not active_player is None:
             first = self.dealer.hand[0]
             val = hand_value([first])
-            lines.append(f"Дилер: {first}\n")
+            lines.append(f"🤵 Дилер: {first}\n")
         elif self.stage == Stage.End:
             cards = " ".join(self.dealer.hand)
             val = hand_value(self.dealer.hand)
-            lines.append(f"Дилер: {cards} [{val}]\n")
+            lines.append(f"🤵 Дилер: {cards} [{val}]\n")
 
         for player in self.players:
             cards = " ".join(player.hand)
@@ -807,6 +808,6 @@ async def dispatch_act(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def register_handlers(app):
-    app.add_handler(CommandHandler(["blackjack", "bj"], BlackjackGame.start))
+    app.add_handler(CommandHandler(list(HandlerBlackJack), BlackjackGame.start))
     app.add_handler(CallbackQueryHandler(dispatch_bet, pattern="^bj_bet_"))
     app.add_handler(CallbackQueryHandler(dispatch_act, pattern="^bj_act_"))
