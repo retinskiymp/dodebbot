@@ -15,6 +15,7 @@ class ItemId(StrEnum):
     Calculator = "calculator"
     Insurance = "insurance"
     HotCard = "hot_card"
+    Escape = "escape"
 
 
 @unique
@@ -23,6 +24,7 @@ class ItemIdShortName(StrEnum):
     Calculator = "calc"
     Insurance = "ins"
     HotCard = "hc"
+    Escape = "esc"
 
 
 def _inv(player: "PlayerModel") -> Dict[str, int]:
@@ -94,10 +96,11 @@ class LootBox(Item):
 
     # chance, min, max
     LOOT_TABLE: dict[Optional[str], tuple[int, int, int]] = {
-        "coins": (30, 0, 200),
-        ItemId.Insurance: (30, 1, 3),
-        ItemId.Lootbox: (20, 1, 2),
-        ItemId.HotCard: (20, 1, 2),
+        "coins": (30, 0, 150),
+        ItemId.Escape: (25, 1, 3),
+        ItemId.Insurance: (15, 1, 3),
+        ItemId.Lootbox: (20, 1, 3),
+        ItemId.HotCard: (10, 1, 3),
     }
 
     def open_lootbox(self, player: "PlayerModel", qty: int = 1) -> str:
@@ -138,9 +141,8 @@ class LootBox(Item):
                 name = item.name if item else str(item_id)
             lines.append(f"{name} × {cnt}")
 
-        return (
-            f"🎁 Открыто {qty} лутбоксов стоимостью {qty * self.price} монет\n"
-            "🏆 Содержимое:\n" + "\n".join(f"— {line}" for line in lines)
+        return f"🎁 Открыто {qty} лутбоксов\n" "🏆 Содержимое:\n" + "\n".join(
+            f"— {line}" for line in lines
         )
 
     def buy(self, player: "PlayerModel", qty: int = 1) -> str:
@@ -199,11 +201,26 @@ class HotCard(Item):
         return self._impossible_to_use(self)
 
 
+class Escape(Item):
+    id = ItemId.Escape
+    id_short_name = ItemIdShortName.Escape
+    name = "🏃 Побег"
+    desc = "Позволяет сбежать из игры в блэкджек, потеряв половину своей ставки"
+    price = 100
+
+    def buy(self, player: "PlayerModel", qty: int = 1) -> str:
+        return self._impossible_to_buy(self)
+
+    def use(self, player: "PlayerModel", qty: int = 1) -> str:
+        return self._impossible_to_use(self)
+
+
 ITEMS: Dict[str, Item] = {
     ItemId.Lootbox: LootBox(),
     ItemId.Calculator: Calculator(),
     ItemId.Insurance: Insurance(),
     ItemId.HotCard: HotCard(),
+    ItemId.Escape: Escape(),
 }
 
 SHOP_ITEMS: Dict[str, Item] = {

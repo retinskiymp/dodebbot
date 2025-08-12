@@ -112,11 +112,24 @@ HOTCARD_DESC = f"""
 — Это только ориентир; шансы, не гарантия исхода.
 """
 
+ESCAPE_DESC = f"""
+{ITEMS[ItemId.Escape].name} <{ITEMS[ItemId.Escape].id_short_name}>
+
+Что это
+Одноразовый предмет, позволяющий сбежать из игры в блэкджек, потеряв половину своей ставки.
+
+Как работает
+— Расходует 1 «{ITEMS[ItemId.Escape].name}».
+— При активации игрок сбегает из текущей игры в блэкджек.
+— На баланс возвращается половина текущей ставки (округляется до целого).
+"""
+
 ALIAS_BJ = (HandlerBlackJack.long, HandlerBlackJack.short)
 ALIAS_DOUBLE = ("double",)
 ALIAS_SPLIT = ("split",)
 ALIAS_INSURANCE = (ITEMS[ItemId.Insurance].id, ITEMS[ItemId.Insurance].id_short_name)
 ALIAS_HOTCARD = (ITEMS[ItemId.HotCard].id, ITEMS[ItemId.HotCard].id_short_name)
+ALIAS_ESCAPE = (ITEMS[ItemId.Escape].id, ITEMS[ItemId.Escape].id_short_name)
 
 WIKI_DATA: Dict[Tuple[str, ...], str] = {
     ALIAS_BJ: BLACK_JACK_RULES,
@@ -124,6 +137,7 @@ WIKI_DATA: Dict[Tuple[str, ...], str] = {
     ALIAS_SPLIT: SPLIT_DESC,
     ALIAS_INSURANCE: INSURANCE_DESC,
     ALIAS_HOTCARD: HOTCARD_DESC,
+    ALIAS_ESCAPE: ESCAPE_DESC,
 }
 
 

@@ -113,6 +113,7 @@ class Player:
     bet: int = 0
     balance: int = 0
     splitted: bool = False
+    escape: bool = False
     insurance: bool = False
     insurance_bet: int = 0
     result: str = ""
@@ -250,6 +251,20 @@ class BlackjackGame:
                         )
                     ]
                 )
+            if (
+                player_has_item(p, ItemId.Escape)
+                and not active_player.escape
+                and len(hand) == 2
+                and not active_player.insurance
+            ):
+                rows.append(
+                    [
+                        InlineKeyboardButton(
+                            ITEMS[ItemId.Escape].name,
+                            callback_data="bj_act_escape",
+                        )
+                    ]
+                )
 
         return InlineKeyboardMarkup(rows)
 
@@ -299,6 +314,8 @@ class BlackjackGame:
             prefix = ""
             if player.insurance:
                 prefix = "🛡"
+            if player.escape:
+                prefix = "🏃"
             active_mark = (
                 "🔸" if self.stage == Stage.Play and player == active_player else "•"
             )
@@ -649,6 +666,21 @@ class BlackjackGame:
             if query:
                 await query.answer(hint, show_alert=True)
             return
+        if act == "escape":
+            if active_player.escape:
+                if query:
+                    return await query.answer("Вы уже сбежали", show_alert=True)
+            with SessionLocal() as db:
+                p = get_player_by_id(db, active_player.uid, self.chat_id)
+                if not player_has_item(p, ItemId.Escape):
+                    if query:
+                        return await query.answer(
+                            "У вас нет предмета Побег", show_alert=True
+                        )
+                change_item_amount(p, ItemId.Escape, -1)
+                active_player.escape = True
+                db.commit()
+            self.active_player_index += 1
 
         if query:
             await query.answer()
@@ -673,6 +705,13 @@ class BlackjackGame:
                 player_nbj = player_val == 21 and len(player.hand) == 2
                 player_profit = 0
                 res_str = ""
+
+                if player.escape:
+                    half_bet = math.ceil(player_bet / 2)
+                    player.result = f"🏃 {player.name} Побег -{half_bet}"
+                    change_balance_f(p, half_bet)
+                    self.session_results[player.uid].profit -= half_bet
+                    continue
 
                 if player_val > 21:
                     res_str = f"💀 {player.name} -{player_bet}"
