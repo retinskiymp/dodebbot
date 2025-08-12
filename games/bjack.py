@@ -296,7 +296,7 @@ class BlackjackGame:
                 has_calculator = player_has_item(p, ItemId.Calculator)
 
             prefix = ""
-            if active_player and active_player.insurance:
+            if player.insurance:
                 prefix = "🛡"
             active_mark = (
                 "🔸" if self.stage == Stage.Play and player == active_player else "•"
